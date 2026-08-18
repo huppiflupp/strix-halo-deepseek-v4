@@ -76,3 +76,73 @@ Ollama pflegt eigene Patches, und die GGUF-Metadaten dieser Modelle weichen von 
 mainline-llama.cpp erwartet. Kein Hardware- oder Backend-Problem — es fehlt eine passende
 llama.cpp-Version. Aergerlich ist der Ausfall von `gemma4:26b-a4b-it-bf16`, dem einzigen
 weiteren MoE im Bestand (4 B aktiv), das einen zweiten Datenpunkt zum MoE-Overhead geliefert haette.
+
+---
+
+# Nachbau: Qwen3-30B-A3B-Instruct-2507 (strix-halo-guide)
+
+Der [strix-halo-guide](https://github.com/hogeheer499-commits/strix-halo-guide) berichtet
+fuer dieses MoE **100,04 t/s tg128 / 1416,03 t/s pp512** (Build b9467, Vulkan/RADV, Mesa 26.1.1).
+Nachbau mit `unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF`, IQ4_XS (15,25 GiB, 30,53 B / 3 B aktiv):
+
+| Variante | pp512 | tg128 |
+|---|---:|---:|
+| A) Guide-Flags (`-fa 1 -mmp 0 -b 2048 -ub 512 -t 16 --poll 50`), Vulkan | 1378,19 ± 8,55 | **85,53 ± 0,53** |
+| B) ohne Zusatzflags, Vulkan | 1339,84 ± 51,04 | 84,33 ± 0,31 |
+| C) Guide-Flags, HIP/ROCm | 1295,68 ± 24,60 | 72,71 ± 0,35 |
+| Guide-Referenz | 1416,03 | 100,04 |
+
+**Drei Befunde:**
+
+1. **Der Prefill ist reproduziert** (1378 vs. 1416, −2,7 %).
+2. **Die Guide-Flags bringen fast nichts** (+1,4 % tg, +2,9 % pp). Flash Attention und groessere
+   Batches sind auf dieser Hardware nicht der Hebel, als der sie oft gehandelt werden.
+3. **Vulkan schlaegt HIP bei diesem MoE um +17,6 %** — mehr als doppelt so deutlich wie bei den
+   dichten Modellen (+8 %).
+
+## Die 15 % Decode-Differenz erklaeren sich durch die Quant-Groesse
+
+Der Guide nennt sein Quant "IQ4_XS-**3.63bpw**", llama.cpp meldet fuer unsere Datei
+"IQ4_XS - **4.25 bpw**" (15,25 GiB fuer 30,53 B). Skaliert man linear ueber die pro Token
+gelesenen Bytes:
+
+```
+85,53 t/s x (4,25 / 3,63) = 100,14 t/s     Guide: 100,04 t/s     Abweichung: +0,1 %
+```
+
+Die Uebereinstimmung ist frappierend genau. **Einschraenkung:** bei den gaengigen Anbietern
+existiert kein 3,63-bpw-IQ4_XS (bartowski liegt bei 4,31 bpw), die bpw-Angabe des Guides
+koennte also anders gezaehlt sein (z. B. nur ueber quantisierte Tensoren, ohne Embedding- und
+Output-Layer). Ein direkter Gegentest mit einem echten 3,63-bpw-Quant steht aus.
+
+# Korrektur: MoE ist auf Strix Halo NICHT generell langsam
+
+Der Qwen-Nachbau widerlegt die urspruengliche Schlussfolgerung, MoE-Overhead fresse auf dieser
+Hardware generell den Bandbreitenvorteil auf:
+
+| | GB/Token | t/s | effektive Bandbreite | Anteil |
+|---|---:|---:|---:|---:|
+| dichte Modelle (Mittel aus 4) | — | — | **203 GB/s** | 100 % |
+| Qwen3-30B-A3B (3 B aktiv) | 1,59 | 85,5 | **136 GB/s** | **67 %** |
+| DeepSeek-V4-Flash (13 B aktiv) | 4,98 | 11,9 | **59 GB/s** | **29 %** |
+
+MoE kostet also durchaus Effizienz — aber Qwen3-30B-A3B holt zwei Drittel der
+Dense-Bandbreite heraus und liefert damit 85 t/s. **V4-Flash mit 29 % ist der Ausreisser,
+nicht die Regel.**
+
+## Was bei V4-Flash NICHT hilft
+
+| Massnahme | Ergebnis |
+|---|---|
+| spekulatives Decoding (dspark-Draft) | 11,9 → **7,7 t/s** (schlechter) |
+| Flash Attention + `-b 2048 -ub 512 -t 16 --poll 50` | 11,94 → **11,90 t/s** (unveraendert) |
+| HIP statt Vulkan | laedt nicht |
+
+Der Engpass liegt also weder in der Attention noch im Batching. Zwei Kandidaten bleiben:
+
+1. **GTT-Anteil:** 34,5 der 98,5 GiB (35 %) liegen ausserhalb des VRAM-Blocks. Qwen3-30B passt
+   mit 15,25 GiB vollstaendig ins VRAM. Falls GTT-Zugriffe spuerbar langsamer sind, erklaert
+   das einen grossen Teil der Luecke. **Testbar** durch BIOS-UMA auf `512M` — dann liegt alles
+   einheitlich in GTT.
+2. **`deepseek4`-Kernel:** Die Architektur ist neu in llama.cpp, waehrend `qwen3moe` seit
+   langem optimiert ist. Ein Update auf einen neueren Build koennte messbar etwas bringen.
