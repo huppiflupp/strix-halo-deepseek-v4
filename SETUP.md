@@ -204,11 +204,10 @@ systemctl --user start llama-v4      # 23 t/s, dafuer 284 B
 
 **Empfehlung nach Aufgabe:**
 
-* **LFM2.5-8B-A1B** fuer Agent-Loops mit vielen Tool-Aufrufen. Der Prefill von knapp 4000 t/s
-  ist hier wichtiger als der Decode — Agenten verarbeiten bei jedem Turn einen langen,
-  wachsenden Kontext. Einschraenkung: 1 B aktive Parameter sind wenig; der Test deckte einen
-  einfachen Tool-Aufruf ab, nicht mehrstufiges Reasoning.
-* **Qwen3-30B-A3B** als Mittelweg, wenn die Aufgaben anspruchsvoller werden.
+* **Qwen3-30B-A3B ist die richtige Wahl fuer Agent-Betrieb.** 83 t/s, und es loest Aufgaben
+  zuverlaessig.
+* **LFM2.5-8B-A1B nur fuer triviale Einzelaufrufe.** Die 150 t/s sind verlockend, aber 1 B
+  aktive Parameter reichen nicht fuer mehrstufiges Problemloesen — siehe unten.
 * **DeepSeek-V4-Flash** fuer einzelne schwere Aufgaben, wo Modellqualitaet ueber Durchsatz geht.
 
 # Was aus dem strix-halo-guide NICHT noetig war
@@ -228,3 +227,36 @@ einige Punkte, die hier entweder schon erfuellt oder nicht uebertragbar sind:
 
 Das `setup.sh` des Guides selbst ist **nicht lauffaehig auf Fedora/Nobara** — es nutzt `apt`,
 `update-grub`, `update-initramfs` und `add-apt-repository`.
+
+
+# Warnung: Geschwindigkeit ersetzt keine Faehigkeit
+
+LFM2.5-8B-A1B ist mit 150 t/s knapp doppelt so schnell wie Qwen3-30B-A3B und besteht einfache
+Tool-Tests fehlerfrei (5/5 korrekte Aufrufe). Bei mehrstufigen Aufgaben faellt es jedoch aus —
+und zwar **stillschweigend**.
+
+Testfall: *"What is the current time in Peking? Use the terminal tool."*
+(Soll: 06:43 lokaler Zeit entsprechend; die Maschine steht auf CEST/UTC+2.)
+
+| Modell | Antwort | |
+|---|---|---|
+| Qwen3-30B-A3B | `2026-08-19 06:43:40 CST` | korrekt, mit Zeitzonenkuerzel |
+| LFM2.5-8B-A1B | `2026-08-18T22:43:23` | **falsch** — UTC statt CST, dazu falsches Datum |
+
+Der Ablauf im Agent-Log zeigt das Muster:
+
+```
+python3 -c "import pytz; ..."        -> exit 1   (pytz nicht installiert)
+date ... + 2 commands                -> exit 1   (naechster Versuch scheitert)
+date +"%Y-%m-%d %H:%M:%S"            -> OK       (aber das ist die LOKALE Zeit)
+```
+
+Nach zwei Fehlschlaegen gibt das Modell den Zeitzonen-Teil auf, holt die lokale Zeit und
+praesentiert sie als Ergebnis. Der naheliegende Weg `TZ=Asia/Shanghai date` kommt ihm nicht in
+den Sinn. Entscheidend: **es meldet keinen Fehler**, sondern antwortet mit voller Ueberzeugung
+falsch.
+
+**Konsequenz fuer die Modellwahl:** Ein Agent muss erkennen koennen, dass sein erster Versuch
+gescheitert ist, und einen anderen Weg waehlen. Diese Faehigkeit skaliert mit den aktiven
+Parametern, nicht mit dem Durchsatz. Bei Benchmark-Tabellen wie diesem Repo lohnt daher die
+Erinnerung: t/s sagt nichts darueber, ob die Antwort stimmt.
