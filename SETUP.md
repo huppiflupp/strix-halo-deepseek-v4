@@ -260,3 +260,7 @@ falsch.
 gescheitert ist, und einen anderen Weg waehlen. Diese Faehigkeit skaliert mit den aktiven
 Parametern, nicht mit dem Durchsatz. Bei Benchmark-Tabellen wie diesem Repo lohnt daher die
 Erinnerung: t/s sagt nichts darueber, ob die Antwort stimmt.
+
+**LFM2.5 wurde nach diesem Befund wieder entfernt** — Dienst, Provider-Eintrag und Modelldatei.
+Es blieb bei zwei Modellen: Qwen3-30B-A3B als Standard (83 t/s, Port 8080) und
+DeepSeek-V4-Flash fuer schwere Einzelfragen (23 t/s, gleicher Port, per systemd exklusiv).
