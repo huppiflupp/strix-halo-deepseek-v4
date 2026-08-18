@@ -214,6 +214,8 @@ die Bandbreite der Engpass ist, hilft es nicht, weniger Bytes zu lesen.
 
 ## Offene Punkte
 
-* UMA auf `512M` gegenpruefen — ob der einheitliche Pool die Decode-Rate verbessert
+* ~~UMA auf `512M` gegenpruefen~~ — erledigt, GTT ist nicht langsamer als VRAM (siehe BENCHMARKS.md)
+* RADV-Fork `Nathanw1014/strix-halo-llamacpp` testen — belegt ~18,5 t/s plain, 21–27 mit Draft
+* llama.cpp aktualisieren (b94041a → aktuell)
 * Prefill-Verhalten bei groesseren Kontexten (32k, 64k) vermessen
-* Groessere Quants (`UD-Q3_K_XL`, 119 GiB) mit UMA auf Minimum
+* Groesseren Quant `UD-Q3_K_XL` (119 GiB) testen — passt seit der UMA-Umstellung

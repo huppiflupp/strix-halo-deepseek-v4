@@ -146,3 +146,118 @@ Der Engpass liegt also weder in der Attention noch im Batching. Zwei Kandidaten 
    einheitlich in GTT.
 2. **`deepseek4`-Kernel:** Die Architektur ist neu in llama.cpp, waehrend `qwen3moe` seit
    langem optimiert ist. Ein Update auf einen neueren Build koennte messbar etwas bringen.
+
+---
+
+# Speicherkonfiguration: BIOS-UMA 512M (alles in GTT)
+
+Nach Umstellung von UMA `Auto` (64 GiB fest zugeteiltes VRAM) auf `512M`:
+
+```
+RAM sichtbar:  124 GiB   (vorher 62)
+VRAM total:    512 MiB   (vorher 64 GiB)
+GTT total:     110 GiB
+Vulkan meldet: 113.152 MiB — ehrlich (vorher 174 GiB, mehr als physisch verbaut)
+```
+
+| Modell | VRAM+GTT gemischt | alles in GTT |
+|---|---:|---:|
+| V4-Flash pp512 / tg128 | 127,39 / 11,94 | 128,37 / **12,02** |
+| Qwen3-30B pp512 / tg128 | 1339,84 / 84,33 | 1316,42 / **84,34** |
+
+**GTT ist nicht langsamer als VRAM.** Bei beiden Modellen identische Werte innerhalb der
+Streuung. Rueckblickend logisch: es ist physisch derselbe Speicher, die Unterscheidung ist
+Buchhaltung des Treibers. Die Hypothese, der GTT-Anteil erklaere die schlechte
+V4-Flash-Effizienz, ist damit **widerlegt**.
+
+Die Umstellung bleibt trotzdem richtig: 124 statt 62 GiB nutzbar, ehrliche Vulkan-Werte, und
+der groessere Quant `UD-Q3_K_XL` (119 GiB) passt jetzt ueberhaupt erst.
+
+# Headless-Betrieb
+
+Umstellung auf `multi-user.target`, `plasmalogin.service` deaktiviert. Vorher liefen ~851 MB
+GUI-Prozesse (plasma-login-gr, kwin_wayland, plasma-keyboard, …), ohne dass jemand eingeloggt war.
+
+| Modell | mit GUI | headless |
+|---|---:|---:|
+| V4-Flash pp512 / tg128 | 128,37 / 12,02 | 128,98 / **11,96** |
+| Qwen3-30B pp512 / tg128 | 1316,42 / 84,34 | 1318,01 / **84,85** |
+| Qwen + Guide-Flags tg128 | 85,53 | 83,24 |
+
+**Kein messbarer Effekt.** Die Vermutung, `kwin_wayland` halte GPU-Kontexte und verfaelsche die
+Messungen, bestaetigt sich nicht — die bisherigen Zahlen waren bereits sauber. Headless spart
+851 MB und zwei Services, ist aber **keine Performance-Massnahme**.
+
+# Einordnung durch externe Quellen
+
+## Gegenmessung mit identischem Quant
+
+[slb350/strix-benchmarks](https://github.com/slb350/strix-benchmarks) hat exakt dasselbe Modell
+und Quant auf derselben Hardware gemessen:
+
+| | Build | pp512 | tg128 |
+|---|---|---:|---:|
+| slb350 (UD-IQ3_XXS, RADV) | b9518 | 114,7 | **12,4** |
+| diese Messung (UD-IQ3_XXS, RADV) | b94041a | **127,39** | 11,94 |
+
+Prefill 11 % darueber, Decode 4 % darunter. Die Konfiguration ist also in Ordnung; die
+11,94 t/s sind kein Konfigurationsfehler, sondern der Mainline-Normalzustand.
+
+## Ein RADV-Fork erreicht das Doppelte
+
+Auf identischer Hardware, gleichem Quant (UD-IQ3_XXS, KV q8_0, 131k ctx), in **einer einzigen
+Session** gegeneinander gemessen
+([r/LocalLLaMA 1vlmh0b](https://www.reddit.com/r/LocalLLaMA/comments/1vlmh0b/deepseek_v4_flash_0731_at_27_ts_decode_on_strix/)):
+
+| Stack | pp2048 | tg plain | tg mit DSpark-Draft |
+|---|---:|---:|---:|
+| Mainline llama.cpp + ROCm 7.14 | 191,28 | — | 13,35 (**DSpark-Gewinn: 0 %**) |
+| `Nathanw1014/strix-halo-llamacpp` v0.6.1, RADV, `-fa on -b/-ub 2048` | **284,98** | **18,55** | **20,96 – 27,13** |
+
+Ergaenzend mit demselben Fork, UD-IQ3_XXS mit Q6-Attention, 64k Kontext: 20,48 plain →
+**Ø 28,5 t/s** mit `--spec-draft-n-max 3`
+([r/LocalLLaMA 1vrm27o](https://www.reddit.com/r/LocalLLaMA/comments/1vrm27o/deepseek_v4_flash_0731_on_strix_halo_draft_model/)).
+
+*(Diese Reddit-Werte stammen aus der Recherche und wurden hier nicht selbst nachgemessen.)*
+
+## Korrektur: warum spekulatives Decoding scheiterte
+
+Die urspruengliche Erklaerung in diesem Repo lautete, der DSpark-Draft sei mit 10,5 GiB BF16
+pro Token teurer als das MoE-Hauptmodell (~10,5 vs. ~4,98 GB/Token) und koenne deshalb nicht
+beschleunigen. **Die Rechnung stimmt, ist aber nicht die Ursache.**
+
+In Mainline-llama.cpp bringt der DSpark-Draft auf dieser Hardware nachweislich **null Gewinn**
+— unabhaengig von seiner Groesse. Im RADV-Fork bringt derselbe Draft **+50 %**. Es lag an der
+Implementierung des spekulativen Decodings, nicht am Draft-Modell.
+
+Damit relativiert sich auch der Lucebox-Wert endgueltig: **27–28 t/s sind mit offenem Werkzeug
+und ohne Experten-Beschneidung erreichbar.** Die beworbenen 32 t/s kaufen die letzten ~15 %
+mit `--ds4-expert-top-k 4`.
+
+## Der Softwarestack ist der groesste Einzelfaktor
+
+Identische Hardware, gpt-oss-120b MXFP4, RADV, pp512: **255,17 t/s (b6119) → 719,91 t/s
+(b9187)** — Faktor 2,8 in neun Monaten
+([kyuz0/amd-strix-halo-toolboxes](https://github.com/kyuz0/amd-strix-halo-toolboxes)).
+
+Weitere Werte von dort (RADV): Qwen3-235B-A22B UD-Q3_K_XL **158,81 / 17,16**,
+GLM-4.5-Air UD-Q4_K_XL **281,21 / 25,02**, gpt-oss-120b **719,91 / 56,61**.
+
+## Weitere belegte Hinweise
+
+* **rocWMMA meiden** auf gfx1151 — Langkontext-Killer: tg32@32k 18,07 **mit** vs. 35,39 **ohne**.
+* **`amd_iommu=off`** bringt 5–12 % gegenueber `iommu=pt`.
+* **GGUF-Herkunft ist messbar:** gpt-oss-120b ggml-org-MXFP4 vs. unsloth-„F16" bei gleicher
+  Groesse → 41,52 vs. 29,72 t/s, weil ein F16-Embedding-Layer auf der CPU landet.
+* **Kein Strix-Halo-Messwert existiert fuer DeepSeek V3/R1 (671B)** — passt auch bei Q2
+  (~200 GB) nicht in 128 GB. Was als „R1 auf Strix Halo" kursiert, sind dichte Llama-70B-Distills.
+
+# Naechste Schritte, nach erwartetem Ertrag
+
+1. **Fork `Nathanw1014/strix-halo-llamacpp` v0.6.1 testen** — belegt 18,55 t/s plain und
+   21–27 t/s mit DSpark, gegen unsere 11,94. Groesster Hebel.
+2. **llama.cpp aktualisieren** (b94041a → aktuell) — Faktor bis 2,8 ueber Versionen belegt,
+   behebt vermutlich auch die 7 nicht ladbaren Ollama-Modelle.
+3. **`amd_iommu=off`** in die Kernel-Cmdline.
+4. **`-ub 2048` fuer lange Prompts** sweepen.
+5. Groesseren Quant `UD-Q3_K_XL` (119 GiB) testen — passt seit der UMA-Umstellung.
