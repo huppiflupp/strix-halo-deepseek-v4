@@ -12,8 +12,10 @@ Stand: 2026-08-18
   (7,7 statt 11,9 t/s) — die Faustregel für dichte Modelle greift bei MoE nicht.
 * Die kursierenden „32 t/s auf Strix Halo" stammen **nicht** aus llama.cpp, sondern aus einem
   proprietären Server mit reduziertem Expert-Routing. Mit llama.cpp sind sie nicht reproduzierbar.
-* Der Prefill ist mit ~25 t/s der eigentliche Engpass — das beworbene 1-M-Kontextfenster
-  ist damit praktisch unbenutzbar.
+* Prefill: **127 t/s** (pp512). Das beworbene 1-M-Kontextfenster bleibt dennoch theoretisch —
+  es wären ~2,2 Stunden reiner Prefill —, aber 32k/64k sind gut machbar.
+* Das **HIP/ROCm-Backend kann das Modell nicht laden**, obwohl es 112 GiB meldet: es kommt
+  nicht an GTT. Vulkan/RADV ist auf dieser APU das funktionierende Backend.
 
 ## Hardware / Software
 
@@ -90,10 +92,23 @@ OOM-Killer die Maschine trifft.
 
 Konfiguration: `-ngl 999 -c 8192`, Vulkan/RADV-Backend, interaktive Läufe.
 
+### Reproduzierbar (llama-bench, `-ngl 999 -p 512 -n 128 -r 2`)
+
+| Backend | pp512 (Prefill) | tg128 (Decode) |
+|---|---|---|
+| **Vulkan / RADV** | **127,39 ± 2,67 t/s** | **11,94 ± 0,01 t/s** |
+| HIP / ROCm | — | — (Modell laedt nicht, s.u.) |
+
+### Interaktive Laeufe (llama-cli, `-ngl 999 -c 8192`)
+
 | Konfiguration | Prefill | Decode | Belegung |
 |---|---|---|---|
 | ohne Draft-Modell | 25,8 t/s | **11,9 t/s** | 98,5 GiB (64 VRAM + 34,5 GTT) |
 | mit `dspark`-Draft, `--spec-draft-n-max 5` | 21,5 t/s | **7,7 t/s** | 109,7 GiB (64 VRAM + 45,7 GTT) |
+
+Die Prefill-Werte der interaktiven Laeufe sind **nicht** aussagekraeftig: bei sehr kurzen
+Prompts dominiert der Overhead. Mit ordentlichem Batching (pp512) liegt der Prefill beim
+Fuenffachen. Der Decode-Wert dagegen deckt sich exakt (11,9 vs. 11,94).
 
 ### Warum spekulatives Decoding hier bremst
 
@@ -132,9 +147,33 @@ Achtung: Xet legt Chunks zusätzlich in `~/.cache/huggingface` ab, der Platzbeda
 des Downloads also grob doppelt. Beim Aufräumen **nur** das `.cache`-Residuum *im local-dir*
 löschen — `~/.cache/huggingface/hub` enthält echte Modelle anderer Anwendungen.
 
+## HIP/ROCm-Backend
+
+Gebaut mit `rocblas-devel` und `hipblas-devel`:
+
+```bash
+cmake -B build-hip -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1151 -DGPU_TARGETS=gfx1151 \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=hipcc -DCMAKE_CXX_COMPILER=hipcc
+```
+
+Der Build laeuft durch, das Laden scheitert jedoch:
+
+```
+Device 0: AMD Radeon 8060S Graphics, gfx1151, VRAM: 112640 MiB
+llama_bench: error: failed to load model
+```
+
+Auch mit `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` bleibt der Fehler identisch.
+
+HIP meldet also 112 GiB (VRAM + GTT), kann aber nur den echten VRAM-Block von 64 GiB
+allozieren — und darin haben die 97 GiB des Modells keinen Platz. Vulkan/RADV behandelt
+VRAM und GTT dagegen als einen Pool und laedt problemlos.
+
+**Fazit: Vulkan/RADV ist auf dieser APU das funktionierende Backend.** Der HIP-Pfad ist fuer
+Modelle groesser als der reservierte VRAM-Block nicht nutzbar.
+
 ## Offene Punkte
 
-* HIP/ROCm-Backend gegen Vulkan messen (Build benötigt `rocblas-devel`, `hipblas-devel`)
-* Reproduzierbare Zahlen via `llama-bench` statt interaktiver Läufe
-* UMA auf `512M` gegenprüfen — ob der einheitliche Pool die Decode-Rate verbessert
-* Prefill-Verhalten bei größeren Kontexten (32k, 64k) vermessen
+* UMA auf `512M` gegenpruefen — ob der einheitliche Pool die Decode-Rate verbessert
+* Prefill-Verhalten bei groesseren Kontexten (32k, 64k) vermessen
+* Groessere Quants (`UD-Q3_K_XL`, 119 GiB) mit UMA auf Minimum
