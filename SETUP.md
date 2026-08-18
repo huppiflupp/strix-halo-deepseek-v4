@@ -164,3 +164,51 @@ model:
 Kompression zum falschen Zeitpunkt los.
 
 Verifiziert: Hermes ruft eigenstaendig das Terminal-Tool auf und liefert korrekte Ergebnisse.
+
+
+# Zwei Modelle, umschaltbar
+
+Fuer Agent-Betrieb ist V4-Flash mit 22–24 t/s zaeh. **Qwen3-30B-A3B-Instruct-2507**
+(30,5 B MoE, 3 B aktiv, IQ4_XS, 15,25 GiB) liefert auf derselben Maschine **83,5 t/s** und
+beherrscht Tool-Calling ebenfalls — im Standard-Qwen-Format (`<tool_call>` mit JSON), das
+llama.cpp besser unterstuetzt als V4-Flashs XML.
+
+| | DeepSeek-V4-Flash | Qwen3-30B-A3B |
+|---|---:|---:|
+| Parameter | 284 B (13 B aktiv) | 30,5 B (3 B aktiv) |
+| Belegung | 111,3 GiB (mit Draft) | 28,1 GiB (inkl. 128k KV) |
+| Decode ueber API | 22–24 t/s | **83,5 t/s** |
+| Kontext | 64k | 128k |
+| Agent-Turn (Tool + Antwort) | Minuten | **39 s** |
+
+Beide Dienste teilen sich Port 8080 und den GPU-Speicher, koennen also nicht gleichzeitig
+laufen. `Conflicts=` in beiden Units laesst systemd automatisch umschalten:
+
+```bash
+systemctl --user start llama-qwen    # stoppt llama-v4 automatisch
+systemctl --user start llama-v4      # und umgekehrt
+```
+
+Danach in `~/.hermes/config.yaml` `default` und `context_length` anpassen
+(`qwen3-30b-a3b` / 131072 bzw. `deepseek-v4-flash` / 65536).
+
+**Empfehlung:** Qwen3-30B als Standard fuer Agent-Loops, V4-Flash fuer einzelne schwere
+Aufgaben, wo Modellqualitaet ueber Durchsatz geht.
+
+# Was aus dem strix-halo-guide NICHT noetig war
+
+Der [strix-halo-guide](https://github.com/hogeheer499-commits/strix-halo-guide) empfiehlt
+einige Punkte, die hier entweder schon erfuellt oder nicht uebertragbar sind:
+
+| Empfehlung | Status hier |
+|---|---|
+| `amdgpu.gttsize=131072` | nicht gesetzt — `ttm.pages_limit` ist der modernere Weg und genuegt |
+| AMDVLK entfernen | war nie installiert, nur RADV vorhanden |
+| Mesa aus kisak-mesa PPA | Ubuntu-spezifisch; Fedora hat mit 26.1.5 eine neuere Version |
+| `OLLAMA_VULKAN` / `OLLAMA_IGPU_ENABLE` | irrelevant — hier laeuft llama-server, nicht Ollama |
+| `tuned accelerator-performance` | gesetzt |
+| UMA auf 512 MB | gesetzt |
+| IOMMU aktiviert lassen | Default, unveraendert (`amd_iommu=off` haette die NPU deaktiviert) |
+
+Das `setup.sh` des Guides selbst ist **nicht lauffaehig auf Fedora/Nobara** — es nutzt `apt`,
+`update-grub`, `update-initramfs` und `add-apt-repository`.
