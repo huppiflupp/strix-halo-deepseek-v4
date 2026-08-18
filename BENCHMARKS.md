@@ -261,3 +261,64 @@ GLM-4.5-Air UD-Q4_K_XL **281,21 / 25,02**, gpt-oss-120b **719,91 / 56,61**.
 3. **`amd_iommu=off`** in die Kernel-Cmdline.
 4. **`-ub 2048` fuer lange Prompts** sweepen.
 5. Groesseren Quant `UD-Q3_K_XL` (119 GiB) testen — passt seit der UMA-Umstellung.
+
+---
+
+# Der Fork loest das Problem: +53 % Decode, +62 % Prefill
+
+## Mainline war bereits aktuell
+
+Erste Ueberraschung beim Update: der Build stand schon auf **b10488-9-g9731ad3**, identisch
+mit `origin/master`. Alle bisherigen Messungen liefen also auf einem Stand, der **neuer** ist
+als die Vergleichsquellen (slb350: b9518, kyuz0: b9187, strix-halo-guide: b9467).
+
+Das ist selbst ein Befund: slb350 misst mit b9518 12,4 t/s, wir mit b10488 11,94 — fuer die
+`deepseek4`-Architektur hat sich in Mainline ueber rund 1000 Builds hinweg **nichts** getan.
+Der anderswo belegte Faktor 2,8 ueber llama.cpp-Versionen war hier bereits ausgereizt.
+
+## Fork v0.6.4 gegen Mainline b10488
+
+[`Nathanw1014/strix-halo-llamacpp`](https://github.com/Nathanw1014/strix-halo-llamacpp),
+portables Vulkan-Payload (33 MB, gebuendelter RADV + libdrm), gleiche Maschine, gleiche Flags:
+
+| | Mainline b10488 | **Fork v0.6.4** | Δ |
+|---|---:|---:|---:|
+| **V4-Flash** pp512 | 128,98 | **208,40 ± 5,29** | **+62 %** |
+| **V4-Flash** tg128 | 11,96 | **18,33 ± 0,01** | **+53 %** |
+| Qwen3-30B-A3B pp512 | 1318,01 | **1542,13 ± 13,73** | +17 % |
+| Qwen3-30B-A3B tg128 | 84,85 | 84,94 ± 1,05 | ±0 % |
+
+Der aus der Recherche bekannte Referenzwert von 18,55 t/s ist damit auf **1,2 % genau
+reproduziert**.
+
+## Das Muster bestaetigt die Diagnose
+
+**Bei Qwen bleibt der Decode unveraendert, bei V4-Flash springt er um die Haelfte.** Genau das
+ist zu erwarten, wenn der Engpass im MoE-Kernel liegt: Qwen3-30B lief bereits bei 67 %
+Bandbreiteneffizienz, war also nahe am Limit; V4-Flash lag bei 29 % und hatte entsprechend
+Luft.
+
+| | GB/Token | t/s | Bandbreite | Anteil an dense |
+|---|---:|---:|---:|---:|
+| dichte Modelle (Mittel) | — | — | 203 GB/s | 100 % |
+| Qwen3-30B-A3B | 1,59 | 84,9 | 135 GB/s | 67 % |
+| V4-Flash **Mainline** | 4,98 | 11,96 | 60 GB/s | **29 %** |
+| V4-Flash **Fork** | 4,98 | 18,33 | **91 GB/s** | **45 %** |
+
+Der `_run`-Wrapper des Forks benennt die Ursache selbst — er setzt u. a.:
+
+```
+GGML_VK_MMID_ROWLISTS   MoE row-list prepass (the real mmid fix)
+GGML_VK_MMID_SMALLN     tile-occupancy fix at small per-expert n
+GGML_VK_MMID_WAVE32     wave32 fuer den mmid GEMM
+GGML_VK_MMID_BM64/M128  Expert-Tile-Groessen
+```
+
+`mmid` ist `MUL_MAT_ID`, der MoE-Matmul-Kernel. Die vermutete Ursache — unzureichend
+optimierte MoE-Kernel in Mainline — ist damit nicht nur bestaetigt, sondern benannt und behoben.
+
+## Flags bleiben wirkungslos
+
+`-fa 1 -b 2048 -ub 2048` aendert auch im Fork nichts (206,51 / 18,37 gegen 208,40 / 18,33).
+Ueber alle Messungen dieses Projekts hinweg gilt: **Flag-Tuning war auf dieser Hardware nie
+der Hebel, der Softwarestack immer.**
