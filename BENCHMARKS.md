@@ -374,3 +374,48 @@ Zum Vergleich Qwen3-30B-A3B, auf die 3,63 bpw des strix-halo-guide skaliert:
 Die Lehre ist eindeutig: **Auf dieser Hardware entscheidet die Kernel-Implementierung, nicht
 die Konfiguration.** Saemtliche System- und Flag-Optimierungen zusammen bringen weniger als
 3 %, der Wechsel des Softwarestacks ueber 50 %.
+
+# Spekulatives Decoding — im Fork funktioniert es
+
+Dasselbe DSpark-Draft-Modell, das in Mainline die Rate von 11,9 auf 7,7 t/s **verschlechterte**,
+bringt im Fork einen deutlichen Gewinn. Gemessen mit `llama-cli`, `--spec-draft-n-max 3`,
+`-ngl 999 -ngld 999 -c 4096`, GPU auf `high`:
+
+| Inhalt | Generation | vs. plain (18,8) |
+|---|---:|---:|
+| Kurzantwort (~8 Token) | 29,0 t/s | +54 % |
+| Fliesstext (200 Woerter) | **28,2 t/s** | **+50 %** |
+| Code (Python-Funktion) | **23,9 t/s** | **+27 %** |
+
+Der Alltagswert liegt bei **24–28 t/s**. Bemerkenswert: Code ist der schwaechste Fall, obwohl
+Code gemeinhin als besser vorhersagbar gilt — das DSpark-Draft scheint auf natuerlichsprachlichen
+Text besser abgestimmt.
+
+**Messhinweis:** `llama-cli` schreibt die Statuszeile `[ Prompt: … | Generation: … ]` direkt ans
+TTY. Weder eine Pipe noch `--log-file` fangen sie ab — die Ausgabe muss ueber
+`tmux capture-pane` abgegriffen werden. Zwei Messversuche sind daran zunaechst stillschweigend
+gescheitert.
+
+# Gesamtergebnis
+
+| Stufe | V4-Flash pp512 | V4-Flash tg128 |
+|---|---:|---:|
+| Ausgangsmessung (Mainline b10488, powersave) | 127,39 | 11,94 |
+| + Fork v0.6.4 | 208,40 | 18,33 |
+| + performance / high | 207,53 | 18,85 |
+| + DSpark-Draft | — | **23,9 – 29,0** |
+| **Gesamt** | **+63 %** | **+100 bis +143 %** |
+
+## Einordnung gegen Lucebox
+
+Die beworbenen **32 t/s decode** stammen aus einem proprietaeren `dflash_server` mit eigenem
+~2,88-bpw-Mixed-Precision-Format und **reduziertem Expert-Routing** (`--ds4-expert-top-k 4`
+statt 6) — es ist damit strenggenommen nicht mehr dasselbe Modell.
+
+Mit offenem Werkzeug, unveraendertem Routing und einem oeffentlichen Quant erreichen wir
+**28,2 t/s im Fliesstext**. Die Differenz betraegt rund 12 %, und sie wird auf der Gegenseite
+mit einer Qualitaetseinbusse erkauft, die nicht ausgewiesen wird.
+
+Die urspruengliche Einschaetzung dieses Repos, die 32 t/s seien "mit llama.cpp nicht
+reproduzierbar", war damit im Ergebnis zu pessimistisch: der Abstand ist klein, und er liegt
+nicht an der Hardware.

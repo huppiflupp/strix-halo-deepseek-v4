@@ -7,7 +7,10 @@ Stand: 2026-08-18
 
 ## TL;DR
 
-* Das Modell **läuft** auf einer Einzelmaschine: 98,5 GiB belegt, ~12 t/s Decode.
+* Das Modell **läuft** auf einer Einzelmaschine: 98,5 GiB belegt.
+* **24–28 t/s Decode** mit dem Fork `Nathanw1014/strix-halo-llamacpp` + DSpark-Draft —
+  gegenüber 11,94 t/s in Mainline-llama.cpp. Der Softwarestack macht den Unterschied,
+  nicht die Konfiguration.
 * **Spekulatives Decoding mit dem mitgelieferten `dspark`-Draft-Modell macht es langsamer**
   (7,7 statt 11,9 t/s) — die Faustregel für dichte Modelle greift bei MoE nicht.
 * Die kursierenden „32 t/s auf Strix Halo" stammen **nicht** aus llama.cpp, sondern aus einem
