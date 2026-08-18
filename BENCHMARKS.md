@@ -322,3 +322,55 @@ optimierte MoE-Kernel in Mainline — ist damit nicht nur bestaetigt, sondern be
 `-fa 1 -b 2048 -ub 2048` aendert auch im Fork nichts (206,51 / 18,37 gegen 208,40 / 18,33).
 Ueber alle Messungen dieses Projekts hinweg gilt: **Flag-Tuning war auf dieser Hardware nie
 der Hebel, der Softwarestack immer.**
+
+# Taktung: CPU-Governor und GPU-Performance-Level
+
+Ausgangszustand war `powersave` / `auto`. Umgestellt per
+`tuned-adm profile accelerator-performance` (setzt den Governor auf `performance`) und
+`power_dpm_force_performance_level=high` (fixiert die GPU auf 2900 MHz — nicht persistent
+ueber Reboots).
+
+| | powersave / auto | performance / high | Δ |
+|---|---:|---:|---:|
+| V4-Flash **Fork** pp512 | 208,40 | 207,53 | −0,4 % |
+| V4-Flash **Fork** tg128 | 18,33 | **18,85** | **+2,8 %** |
+| V4-Flash Mainline pp512 | 128,98 | 125,37 | −2,8 % |
+| V4-Flash Mainline tg128 | 11,96 | 12,13 | +1,4 % |
+| Qwen3-30B Fork pp512 | 1542,13 | 1550,14 | +0,5 % |
+| Qwen3-30B Fork tg128 | 84,94 | **87,57** | **+3,1 %** |
+
+**Der Decode gewinnt, der Prefill nicht** — entgegen der naheliegenden Erwartung, ein
+rechenlastiger Prefill muesse vom hoeheren Takt profitieren.
+
+Erklaerung: Beim Prefill liegt Dauerlast an, die GPU taktet auch unter `auto` von selbst hoch.
+Beim Decode wechseln kurze Rechenphasen mit Wartezyklen auf den Speicher; dort taktet `auto`
+zwischendurch herunter, und genau das verhindert `high`. Der Gewinn ist klein, aber ueber alle
+drei Laeufe konsistent und bei σ ≈ 0,01 kein Rauschen.
+
+# Gesamtbilanz
+
+| Stufe | V4-Flash pp512 | V4-Flash tg128 |
+|---|---:|---:|
+| Ausgangsmessung (Mainline, powersave) | 127,39 | 11,94 |
+| + Fork v0.6.4 | 208,40 | 18,33 |
+| + performance/high | **207,53** | **18,85** |
+| | **+63 %** | **+58 %** |
+
+Zum Vergleich Qwen3-30B-A3B, auf die 3,63 bpw des strix-halo-guide skaliert:
+87,57 × (4,25/3,63) = **102,5 t/s** gegen dessen Referenz von 100,04.
+
+**Was gewirkt hat und was nicht — ueber das gesamte Projekt:**
+
+| Massnahme | Effekt auf V4-Flash tg128 |
+|---|---|
+| **Fork statt Mainline** | **+53 %** |
+| CPU/GPU auf performance/high | +2,8 % |
+| BIOS-UMA 512M (alles GTT) | ±0 % |
+| Headless-Betrieb | ±0 % |
+| `-fa 1 -b 2048 -ub 2048` | ±0 % |
+| llama.cpp aktualisieren | ±0 % (war bereits aktuell) |
+| spekulatives Decoding (Mainline) | **−36 %** |
+
+Die Lehre ist eindeutig: **Auf dieser Hardware entscheidet die Kernel-Implementierung, nicht
+die Konfiguration.** Saemtliche System- und Flag-Optimierungen zusammen bringen weniger als
+3 %, der Wechsel des Softwarestacks ueber 50 %.
