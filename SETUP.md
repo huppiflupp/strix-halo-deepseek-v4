@@ -166,20 +166,24 @@ Kompression zum falschen Zeitpunkt los.
 Verifiziert: Hermes ruft eigenstaendig das Terminal-Tool auf und liefert korrekte Ergebnisse.
 
 
-# Zwei Modelle, umschaltbar
+# Drei Modelle, umschaltbar
 
 Fuer Agent-Betrieb ist V4-Flash mit 22–24 t/s zaeh. **Qwen3-30B-A3B-Instruct-2507**
 (30,5 B MoE, 3 B aktiv, IQ4_XS, 15,25 GiB) liefert auf derselben Maschine **83,5 t/s** und
 beherrscht Tool-Calling ebenfalls — im Standard-Qwen-Format (`<tool_call>` mit JSON), das
 llama.cpp besser unterstuetzt als V4-Flashs XML.
 
-| | DeepSeek-V4-Flash | Qwen3-30B-A3B |
-|---|---:|---:|
-| Parameter | 284 B (13 B aktiv) | 30,5 B (3 B aktiv) |
-| Belegung | 111,3 GiB (mit Draft) | 28,1 GiB (inkl. 128k KV) |
-| Decode ueber API | 22–24 t/s | **83,5 t/s** |
-| Kontext | 64k | 128k |
-| Agent-Turn (Tool + Antwort) | Minuten | **39 s** |
+| | DeepSeek-V4-Flash | Qwen3-30B-A3B | LFM2.5-8B-A1B |
+|---|---:|---:|---:|
+| Parameter | 284 B (13 B aktiv) | 30,5 B (3 B aktiv) | 8,5 B (1 B aktiv) |
+| Quant / Groesse | IQ3_XXS, 97 GiB | IQ4_XS, 15,25 GiB | Q4_K_M, 4,95 GiB |
+| Belegung | 111,3 GiB (mit Draft) | 28,1 GiB | ~10 GiB |
+| llama-bench tg128 | 18,85 | 87,57 | **155,02** |
+| llama-bench pp512 | 207,5 | 1550 | **3957,9** |
+| Decode ueber API | 22–24 t/s | 83,5 t/s | **144–150 t/s** |
+| Kontext | 64k | 128k | 128k |
+| Agent-Turn (Tool + Antwort) | Minuten | 39 s | **8 s** |
+| Tool-Calling | XML, via `--jinja` | Qwen-JSON | JSON |
 
 Beide Dienste teilen sich Port 8080 und den GPU-Speicher, koennen also nicht gleichzeitig
 laufen. `Conflicts=` in beiden Units laesst systemd automatisch umschalten:
@@ -192,8 +196,20 @@ systemctl --user start llama-v4      # und umgekehrt
 Danach in `~/.hermes/config.yaml` `default` und `context_length` anpassen
 (`qwen3-30b-a3b` / 131072 bzw. `deepseek-v4-flash` / 65536).
 
-**Empfehlung:** Qwen3-30B als Standard fuer Agent-Loops, V4-Flash fuer einzelne schwere
-Aufgaben, wo Modellqualitaet ueber Durchsatz geht.
+```bash
+systemctl --user start llama-lfm     # 150 t/s, Agent-Turn in 8 s
+systemctl --user start llama-qwen    # 83 t/s
+systemctl --user start llama-v4      # 23 t/s, dafuer 284 B
+```
+
+**Empfehlung nach Aufgabe:**
+
+* **LFM2.5-8B-A1B** fuer Agent-Loops mit vielen Tool-Aufrufen. Der Prefill von knapp 4000 t/s
+  ist hier wichtiger als der Decode — Agenten verarbeiten bei jedem Turn einen langen,
+  wachsenden Kontext. Einschraenkung: 1 B aktive Parameter sind wenig; der Test deckte einen
+  einfachen Tool-Aufruf ab, nicht mehrstufiges Reasoning.
+* **Qwen3-30B-A3B** als Mittelweg, wenn die Aufgaben anspruchsvoller werden.
+* **DeepSeek-V4-Flash** fuer einzelne schwere Aufgaben, wo Modellqualitaet ueber Durchsatz geht.
 
 # Was aus dem strix-halo-guide NICHT noetig war
 
