@@ -296,3 +296,29 @@ Architektur — entscheidend ist `A3B` im Namen bzw. `expert_used_count` in den 
 **Nicht ladbar:** Ollamas eigene GGUF-Varianten (`qwen3.6:latest` u. a.) scheitern an
 `rope.dimension_sections has wrong array length` — weder Mainline noch der Fork laden sie.
 Regulaere GGUFs von unsloth/bartowski/ggml-org funktionieren.
+
+
+# Kontextfenster: 256k nativ, 1M waere moeglich
+
+Qwen3.6-35B-A3B hat mit 41 Layern und nur **2 KV-Heads** eine sehr schlanke Attention. Der
+KV-Cache kostet daher nur **82 KiB pro Token**:
+
+| Kontext | KV f16 | KV q8_0 | Prefill @ ~1400 t/s |
+|---:|---:|---:|---:|
+| 128k | 10,2 GiB | 5,1 GiB | 1,6 min |
+| **256k (nativ)** | **20,5 GiB** | 10,2 GiB | 3,1 min |
+| 512k (YaRN 2x) | 41,0 GiB | 20,5 GiB | 6,2 min |
+| 1M (YaRN 4x) | 82,0 GiB | 41,0 GiB | **12,5 min** |
+
+Nach Abzug des Modells stehen ~106 GiB fuer den Cache bereit — **selbst 1M passt mit vollem
+f16-Cache hinein.** Der begrenzende Faktor ist nicht der Speicher, sondern der Prefill: ein
+volles 1-M-Fenster einzulesen dauert rund zwoelfeinhalb Minuten.
+
+**Eingerichtet ist 256k** (`-c 262144`), Qwen3.6s natives Trainingsfenster. Das verdoppelt das
+Fenster gegenueber der Ausgangskonfiguration **ohne YaRN und ohne Qualitaetsnachteil**.
+
+Fuer mehr waere `--rope-scaling yarn --rope-scale 4 --yarn-orig-ctx 262144` noetig. Davon
+abgesehen, dass jede Anfrage dann sehr lange braucht: YaRN 4x extrapoliert weit ueber das
+Training hinaus, und Modelle dieser Groessenklasse verlieren dabei messbar Inhalte aus der
+Mitte des Fensters. Wer das nutzen will, sollte es mit einem Needle-in-a-Haystack-Test
+absichern statt der Fenstergroesse zu vertrauen.
