@@ -15,7 +15,10 @@ Stand: 2026-08-18
 * Prefill: **127 t/s** (pp512). Das beworbene 1-M-Kontextfenster bleibt dennoch theoretisch —
   es wären ~2,2 Stunden reiner Prefill —, aber 32k/64k sind gut machbar.
 * Das **HIP/ROCm-Backend kann das Modell nicht laden**, obwohl es 112 GiB meldet: es kommt
-  nicht an GTT. Vulkan/RADV ist auf dieser APU das funktionierende Backend.
+  nicht an GTT. Mit einem kleineren Modell laeuft HIP einwandfrei — es ist die Groesse,
+  nicht das Backend. Vulkan/RADV nutzt VRAM+GTT als einen Pool und ist damit die praktische Wahl.
+* **V4-Flash ist nicht bandbreitenlimitiert:** ein 27-B-Dense-Modell decodiert gleich schnell,
+  obwohl es pro Token 3x mehr Bytes liest. Der MoE-Overhead frisst den theoretischen Vorteil.
 
 ## Hardware / Software
 
@@ -169,8 +172,45 @@ HIP meldet also 112 GiB (VRAM + GTT), kann aber nur den echten VRAM-Block von 64
 allozieren — und darin haben die 97 GiB des Modells keinen Platz. Vulkan/RADV behandelt
 VRAM und GTT dagegen als einen Pool und laedt problemlos.
 
-**Fazit: Vulkan/RADV ist auf dieser APU das funktionierende Backend.** Der HIP-Pfad ist fuer
-Modelle groesser als der reservierte VRAM-Block nicht nutzbar.
+### Gegenprobe mit einem kleineren Modell
+
+Mit einem Modell, das in den echten VRAM passt (Qwen3.8, 27 B dense, Q4_K_M, 15,65 GiB),
+laeuft HIP einwandfrei:
+
+| Backend | pp512 | tg128 |
+|---|---|---|
+| HIP / ROCm | **338,13 ± 2,83 t/s** | 11,37 ± 0,01 t/s |
+| Vulkan / RADV | 330,94 ± 1,13 t/s | **12,08 ± 0,01 t/s** |
+
+Der Fehlschlag lag also **nicht am HIP-Backend**, sondern allein an der Modellgroesse.
+Der Backend-Unterschied selbst ist klein und geht in beide Richtungen: HIP beim Prefill
++2 %, Vulkan beim Decode +6 %.
+
+**Fazit: Vulkan/RADV ist auf dieser APU die praktische Wahl** — nicht wegen der Rohleistung,
+sondern weil nur es VRAM und GTT als einen Pool nutzt und damit Modelle jenseits des
+VRAM-Blocks ueberhaupt erst ermoeglicht.
+
+## MoE-Overhead: der interessanteste Befund
+
+| Modell | Groesse | Prefill | Decode |
+|---|---|---|---|
+| Qwen3.8, 27 B **dense**, Q4_K_M | 15,65 GiB | 331 t/s | **12,08 t/s** |
+| DeepSeek-V4-Flash, 284 B **MoE**, IQ3_XXS | 97,05 GiB | 127 t/s | **11,94 t/s** |
+
+Ein 284-B-Modell decodiert praktisch gleich schnell wie ein 27-B-Modell — das ist der
+MoE-Vorteil in Reinform. Es ist zugleich dessen Grenze: **rein nach Bandbreite gerechnet
+muesste V4-Flash dreimal schneller sein.**
+
+* V4-Flash: 13 B aktiv bei 3,06 bpw → **~4,6 GiB/Token**
+* Qwen dense: alle 27,3 B aktiv bei Q4_K_M → **~15,65 GiB/Token**
+
+Dass der Vorsprung ausbleibt — und der Prefill sogar 2,6× langsamer ist — zeigt: **V4-Flash
+ist auf dieser Hardware nicht bandbreitenlimitiert.** Der MoE-Overhead (Expert-Routing,
+schlechte Speicherlokalitaet, viele kleine Matrizen statt grosser GEMMs) frisst den
+theoretischen Vorteil auf.
+
+Das erklaert nachtraeglich auch, **warum spekulatives Decoding nichts brachte**: wenn nicht
+die Bandbreite der Engpass ist, hilft es nicht, weniger Bytes zu lesen.
 
 ## Offene Punkte
 
