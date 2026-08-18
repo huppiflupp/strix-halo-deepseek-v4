@@ -264,3 +264,35 @@ Erinnerung: t/s sagt nichts darueber, ob die Antwort stimmt.
 **LFM2.5 wurde nach diesem Befund wieder entfernt** — Dienst, Provider-Eintrag und Modelldatei.
 Es blieb bei zwei Modellen: Qwen3-30B-A3B als Standard (83 t/s, Port 8080) und
 DeepSeek-V4-Flash fuer schwere Einzelfragen (23 t/s, gleicher Port, per systemd exklusiv).
+
+
+# Nachtrag: Qwen3.6-35B-A3B mit MTP als Standard
+
+Qwen3-30B-A3B-Instruct-2507 stammt aus der 3.0-Generation. Der Nachfolger **Qwen3.6-35B-A3B**
+ist ebenfalls MoE (35,5 B total, 3 B aktiv) und in der **MTP-Variante** verfuegbar —
+Multi-Token-Prediction, die llama.cpp ueber `--spec-type draft-mtp` nutzen kann. Das wirkt wie
+ein Draft-Modell, braucht aber kein zweites Modell im Speicher (Aufschlag: 0,45 GiB).
+
+| | pp512 | tg128 | Zeitzonen-Test |
+|---|---:|---:|---|
+| Qwen3-30B-A3B (3.0) | 1565,8 | 87,68 | bestanden |
+| Qwen3.6-35B-A3B, **ohne** MTP | 1401,3 | 62,80 | — |
+| Qwen3.6-35B-A3B, **mit** MTP | — | **88,7** | **bestanden** |
+
+Ohne MTP ist Qwen3.6 trotz neuerer Generation **28 % langsamer** als der Vorgaenger — es hat
+256 statt 128 Experten (teureres Routing bei gleicher Zahl aktiver Experten), und die
+MTP-Schicht rechnet mit, ohne genutzt zu werden. Erst `--spec-type draft-mtp` dreht das um:
+**+46 %**, womit es den Vorgaenger knapp ueberholt.
+
+```bash
+llama-server -m Qwen3.6-35B-A3B-UD-IQ4_XS.gguf \
+  -ngl 999 -c 131072 -fa 1 --jinja --spec-type draft-mtp --port 8082
+```
+
+**Warnung zur Namensgebung:** `qwen3.8` klingt moderner, ist aber ein **dichtes** Modell
+(27,3 B, alle aktiv) und erreicht nur 12,09 t/s. Die Versionsnummer sagt nichts ueber die
+Architektur — entscheidend ist `A3B` im Namen bzw. `expert_used_count` in den Metadaten.
+
+**Nicht ladbar:** Ollamas eigene GGUF-Varianten (`qwen3.6:latest` u. a.) scheitern an
+`rope.dimension_sections has wrong array length` — weder Mainline noch der Fork laden sie.
+Regulaere GGUFs von unsloth/bartowski/ggml-org funktionieren.
