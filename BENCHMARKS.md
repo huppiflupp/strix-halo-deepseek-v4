@@ -419,3 +419,57 @@ mit einer Qualitaetseinbusse erkauft, die nicht ausgewiesen wird.
 Die urspruengliche Einschaetzung dieses Repos, die 32 t/s seien "mit llama.cpp nicht
 reproduzierbar", war damit im Ergebnis zu pessimistisch: der Abstand ist klein, und er liegt
 nicht an der Hardware.
+
+# Versuch: Expert-Routing beschneiden (top-k 4)
+
+Um den von Lucebox genutzten Trick `--ds4-expert-top-k 4` selbst nachzumessen, laesst sich in
+llama.cpp normalerweise das Metadatum ueberschreiben:
+
+```bash
+llama-cli --override-kv deepseek4.expert_used_count=int:4 ...
+```
+
+Die Metadaten des Modells bestaetigen den Ausgangswert:
+
+```
+deepseek4.expert_count       = 256
+deepseek4.expert_used_count  = 6
+deepseek4.expert_shared_count = 1
+deepseek4.expert_weights_norm = True
+```
+
+**Der Versuch scheitert reproduzierbar:**
+
+```
+check_tensor_dims: tensor 'blk.0.ffn_gate_tid2eid.weight' has wrong shape;
+expected  4, 129280,  got  6, 129280
+```
+
+Die 6 ist also **nicht nur ein Metadatum, sondern Teil der Tensorform**. Ein blosses
+Herunterdrehen von top-k ist bei V4-Flash in llama.cpp nicht moeglich.
+
+## Was der Tensorname verraet
+
+`tid2eid` = *token-id to expert-id*, und **129280 ist exakt die Vokabulargroesse** von DeepSeek.
+Das Modell fuehrt demnach eine Tabelle, die jedem Vokabular-Token sechs Experten fest zuordnet
+— statt sie, wie beim klassischen MoE, pro Position dynamisch von einem Gating-Netz waehlen zu
+lassen. Das Routing ist damit zumindest teilweise im Vokabular verankert.
+
+*(Interpretation aus Tensorname und -form; die Architektur wurde nicht im Detail nachgelesen.)*
+
+## Konsequenz fuer die Lucebox-Einordnung
+
+`--ds4-expert-top-k 4` kann dort **kein blosser Laufzeitparameter** sein. Wer diese Tabelle auf
+vier Eintraege kuerzt, greift in die Modellausfuehrung ein: entweder werden die Tensoren
+beschnitten oder der Routing-Code wird umgeschrieben. Beides entfernt Zuordnungen, die im
+Training gelernt wurden — der Eingriff ist tiefer, als der Flag-Name nahelegt.
+
+Ein eigener Gegentest bliebe moeglich, indem man alle `tid2eid`-Tensoren auf die ersten vier
+Spalten kuerzt und ein neues GGUF schreibt. Das Ergebnis waere dann allerdings ein Modell, das
+nachweislich anders rechnet als das trainierte — womit sich ein Tempovergleich mit dem Original
+ohnehin verbietet, solange die Qualitaetseinbusse nicht mitgemessen wird.
+
+## Referenzwert
+
+Der Kontrolllauf mit dem unveraenderten Wert 6 laeuft normal durch und bestaetigt die
+bisherigen Messungen: **18,7 t/s** (llama-cli, `--temp 0`), gegen 18,85 aus llama-bench.
