@@ -269,6 +269,49 @@ spekulativem Decoding: die wurden auf dem Vulkan-Pfad gemessen.
 zweites Backend laufen lassen. Ein stiller Korrektheitsfehler ist auf gfx1151 wahrscheinlicher
 als ein Leistungsproblem, und er ist in Durchsatzzahlen unsichtbar.
 
+## SMT: 16 Threads schlagen 32
+
+Nachtrag vom **2026-09-14**. Strix Halo hat 16 Kerne und 32 Threads. Bei CPU-seitiger Inferenz
+ist **die Kernzahl die richtige Thread-Zahl**, nicht die Thread-Zahl — und der Unterschied ist
+kein Rundungsfehler.
+
+Gemessen mit Qwen3.6-35B-A3B auf ruhiger Maschine, zwei unabhaengige Engines:
+
+| Engine | 16 Threads | 32 Threads | Gewinn durch 16 |
+|---|---|---|---|
+| colibri (CPU-Pfad, int4-gs64) | 28,68 tok/s | 25,58 tok/s | **+12,1 %** |
+| llama.cpp (`-ngl 0`, UD-IQ4_XS) | **24,42 ± 0,03** | 17,76 ± 3,06 | **+37,5 %** |
+
+Beide zeigen denselben Abfall, also ist es eine Eigenschaft der Hardware und keine Eigenheit
+einer Engine. Aufschlussreich ist auch die Streuung: llama.cpps 32-Thread-Lauf ist nicht nur
+langsamer, sondern mit ±3,06 gegen ±0,03 auch deutlich unruhiger. Zwei SMT-Geschwister
+konkurrieren um die Ladeeinheiten desselben Kerns; bei speichernaher Arbeit bringt der zweite
+Thread keine zusaetzliche Arbeit durch, kostet aber Cache und Planbarkeit.
+
+Voller Sweep mit colibri:
+
+| Threads | 8 | 12 | **16** | 20 | 24 | 32 |
+|---|---|---|---|---|---|---|
+| tok/s | 20,16 | 27,63 | **28,68** | 26,37 | 27,71 | 25,58 |
+
+Die Punkte bei 20 und 24 streuen um etwa ±1, der Verlauf dazwischen ist also kein sauberer Bogen.
+Das Maximum bei 16 und der Abfall bei 32 sind aber belastbar.
+
+```bash
+# llama.cpp
+llama-bench -m modell.gguf -t 16 ...
+llama-server -m modell.gguf -t 16 ...
+
+# colibri: nichts setzen. Der eingebaute OMP-Self-Tune findet 16 von allein.
+# COLI_NO_OMP_TUNE=1 schaltet ihn ab und kostet ~10 % — die Empfehlung dafuer
+# steht in docs/vulkan.md und gilt nur fuer den Vulkan-Pfad, nicht fuer CPU-Laeufe.
+```
+
+Der letzte Punkt war ein eigener Stolperstein: Die colibri-Vulkan-Dokumentation empfiehlt
+`COLI_NO_OMP_TUNE=1`, weil spinnende Worker dort den asynchronen I/O-Pool aushungern. Auf einem
+reinen CPU-Lauf gilt das nicht — dort schaltet man damit nur die Automatik ab, die ohnehin das
+Richtige tut.
+
 ## MoE-Overhead: der interessanteste Befund
 
 | Modell | Groesse | Prefill | Decode |
@@ -297,5 +340,6 @@ die Bandbreite der Engpass ist, hilft es nicht, weniger Bytes zu lesen.
 * RADV-Fork `Nathanw1014/strix-halo-llamacpp` testen — belegt ~18,5 t/s plain, 21–27 mit Draft
 * ~~llama.cpp aktualisieren (b94041a → aktuell)~~ — gemessen am 2026-09-14, siehe HIP-Korrektheit
 * ~~HIP-Werte der Gegenprobe auf Korrektheit nachpruefen~~ — erledigt, sie waren betroffen (PPL 663 statt 5,57); korrigierte Tabelle im Abschnitt HIP-Korrektheit
+* ~~Thread-Zahl gegenpruefen~~ — erledigt, 16 statt 32 bringt 12-38 %, siehe SMT-Abschnitt
 * Prefill-Verhalten bei groesseren Kontexten (32k, 64k) vermessen
 * Groesseren Quant `UD-Q3_K_XL` (119 GiB) testen — passt seit der UMA-Umstellung
