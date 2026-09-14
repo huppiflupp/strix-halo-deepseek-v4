@@ -242,12 +242,28 @@ Vulkan gewinnt durch das Update 5,6 % Prefill und war durchgehend korrekt. HIP g
 Leistung, sondern Korrektheit. Und Vulkan bleibt auch danach **25 % vor HIP** beim Decode
 (63,07 gegen 50,36) — die Empfehlung oben gilt unveraendert, jetzt aus zwei Gruenden.
 
-### Konsequenz fuer die Zahlen in diesem Repo
+### Konsequenz fuer die Zahlen in diesem Repo: nachgeprueft
 
-Die HIP-Werte in der Gegenprobe oben (338,13 pp512 / 11,37 tg128) stammen aus llama.cpp
-`b94041a` vom August und sind **nicht auf Korrektheit geprueft**. Sie koennen betroffen sein.
-Die Vulkan-Werte und alle Aussagen zu GTT, Quant-Auswahl, MoE-Overhead und spekulativem
-Decoding sind es nicht — die wurden auf dem Vulkan-Pfad gemessen.
+Die HIP-Werte der Gegenprobe oben (338,13 pp512 / 11,37 tg128) **waren betroffen**. Mit
+demselben Modell nachgemessen (Qwen3.8 27B dense Q4_K_M, 15,65 GiB):
+
+| Build | Backend | Perplexity | pp512 | tg128 |
+|---|---|---|---|---|
+| August | HIP | **663,18 ± 56,5** | 318,20 ± 0,13 | 11,32 ± 0,01 |
+| master `bfdc321` | HIP | 5,5706 ± 0,178 | 315,77 ± 2,10 | 11,86 ± 0,03 |
+| August | Vulkan | — | 272,52 ± 2,02 | 12,27 ± 0,00 |
+| master `bfdc321` | Vulkan | 5,5667 ± 0,179 | **317,25 ± 3,15** | **12,29 ± 0,01** |
+
+Der Fehler trifft also **auch dichte Modelle**, nicht nur MoE — Faktor 119 hier, Faktor 104 beim
+Qwen3.6-MoE. Die beiden korrekten Backends stimmen auf 0,07 % ueberein.
+
+**Damit faellt die Aussage „HIP beim Prefill +2 %":** der HIP-Vorsprung war ein Artefakt des
+fehlerhaften Backends. Korrekt gemessen ist der Prefill ein **Gleichstand** (315,8 gegen 317,3,
+ueberlappende Fehlerbalken) und Vulkan fuehrt beim Decode mit **+3,6 %**. Die Empfehlung
+zugunsten von Vulkan bleibt also — sie war nur aus dem falschen Grund knapp.
+
+Nicht betroffen sind die Vulkan-Werte und alle Aussagen zu GTT, Quant-Auswahl, MoE-Overhead und
+spekulativem Decoding: die wurden auf dem Vulkan-Pfad gemessen.
 
 **Praxisregel fuer diese Hardware:** vor jeder GPU-Messung zuerst `llama-perplexity` gegen ein
 zweites Backend laufen lassen. Ein stiller Korrektheitsfehler ist auf gfx1151 wahrscheinlicher
@@ -280,7 +296,6 @@ die Bandbreite der Engpass ist, hilft es nicht, weniger Bytes zu lesen.
 * ~~UMA auf `512M` gegenpruefen~~ — erledigt, GTT ist nicht langsamer als VRAM (siehe BENCHMARKS.md)
 * RADV-Fork `Nathanw1014/strix-halo-llamacpp` testen — belegt ~18,5 t/s plain, 21–27 mit Draft
 * ~~llama.cpp aktualisieren (b94041a → aktuell)~~ — gemessen am 2026-09-14, siehe HIP-Korrektheit
-* HIP-Werte der Gegenprobe (338/11,37) auf Korrektheit nachpruefen — moeglicherweise auf dem
-  fehlerhaften Backend entstanden
+* ~~HIP-Werte der Gegenprobe auf Korrektheit nachpruefen~~ — erledigt, sie waren betroffen (PPL 663 statt 5,57); korrigierte Tabelle im Abschnitt HIP-Korrektheit
 * Prefill-Verhalten bei groesseren Kontexten (32k, 64k) vermessen
 * Groesseren Quant `UD-Q3_K_XL` (119 GiB) testen — passt seit der UMA-Umstellung
