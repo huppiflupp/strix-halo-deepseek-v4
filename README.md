@@ -17,6 +17,9 @@ Stand: 2026-08-18
   proprietären Server mit reduziertem Expert-Routing. Mit llama.cpp sind sie nicht reproduzierbar.
 * Prefill: **127 t/s** (pp512). Das beworbene 1-M-Kontextfenster bleibt dennoch theoretisch —
   es wären ~2,2 Stunden reiner Prefill —, aber 32k/64k sind gut machbar.
+* **Das HIP-Backend rechnete bis Anfang September still falsch** (Perplexity 727 statt 7,0 auf
+  gfx1151) — bei identischem Durchsatz, also fuer jeden Benchmark unsichtbar. Auf aktuellem
+  llama.cpp behoben. Siehe [HIP-Korrektheit](#hip-korrektheit-das-backend-rechnete-still-falsch).
 * Das **HIP/ROCm-Backend kann das Modell nicht laden**, obwohl es 112 GiB meldet: es kommt
   nicht an GTT. Mit einem kleineren Modell laeuft HIP einwandfrei — es ist die Groesse,
   nicht das Backend. Vulkan/RADV nutzt VRAM+GTT als einen Pool und ist damit die praktische Wahl.
@@ -193,6 +196,63 @@ Der Backend-Unterschied selbst ist klein und geht in beide Richtungen: HIP beim 
 sondern weil nur es VRAM und GTT als einen Pool nutzt und damit Modelle jenseits des
 VRAM-Blocks ueberhaupt erst ermoeglicht.
 
+## HIP-Korrektheit: das Backend rechnete still falsch
+
+Nachtrag vom **2026-09-14**. Der Abschnitt oben kommt zu dem Schluss, Vulkan/RADV sei die
+praktische Wahl, weil nur es VRAM und GTT als einen Pool nutzt. Es gibt dafuer einen zweiten,
+davon unabhaengigen Grund: **der HIP-Pfad hat auf gfx1151 monatelang still falsch gerechnet.**
+
+Gemessen mit `llama-perplexity` auf `Qwen3.6-35B-A3B-UD-IQ4_XS`, `-c 2048 --chunks 6`
+(Chunk-Laenge groesser als das `n_ubatch`-Default von 512):
+
+| llama.cpp | Backend | Perplexity |
+|---|---|---|
+| `9731ad3` (2026-08-18) | HIP | **727,00 ± 61,66** |
+| `bfdc321` (2026-09-14) | HIP | 7,0098 ± 0,2464 |
+| `bfdc321` (2026-09-14) | Vulkan | 7,0168 ± 0,2471 |
+
+Faktor 104. Der aeltere Build laedt, laeuft, gibt Tokens aus und meldet keinen Fehler — er
+produziert nur Unsinn. Auf dem aktuellen Master ist das behoben.
+
+### Warum kein Benchmark das findet
+
+| llama.cpp | Backend | pp4096 | tg200 |
+|---|---|---|---|
+| `9731ad3` | HIP | 965,3 ± 5,3 | 49,95 ± 0,12 |
+| `bfdc321` | HIP | 966,9 ± 3,7 | 50,36 ± 0,07 |
+
+**Der kaputte Build ist exakt so schnell wie der korrekte.** Der Fehler kostet keine Leistung,
+er kostet Richtigkeit — und `llama-bench` misst nur Leistung. Wer hier ausschliesslich tok/s
+vergleicht, sieht nichts.
+
+Zugehoerige Issues, alle fuer gfx1151 zwischen Ende August und Anfang September eingereicht:
+[#28211](https://github.com/ggml-org/llama.cpp/issues/28211) (offen, falsche Logits bei Prompts
+ueber `n_ubatch`), [#28113](https://github.com/ggml-org/llama.cpp/issues/28113) (MoE-Modelle
+geben nur noch Satzzeichen aus), [#28537](https://github.com/ggml-org/llama.cpp/issues/28537)
+(Batch-Decoding korrumpiert Logits).
+
+### Was ein Monat Software bringt
+
+| llama.cpp | Backend | pp4096 | tg200 |
+|---|---|---|---|
+| `9731ad3` | Vulkan | 982,8 ± 2,2 | 62,23 ± 0,03 |
+| `bfdc321` | Vulkan | **1037,4 ± 3,1** | **63,07 ± 0,05** |
+
+Vulkan gewinnt durch das Update 5,6 % Prefill und war durchgehend korrekt. HIP gewinnt keine
+Leistung, sondern Korrektheit. Und Vulkan bleibt auch danach **25 % vor HIP** beim Decode
+(63,07 gegen 50,36) — die Empfehlung oben gilt unveraendert, jetzt aus zwei Gruenden.
+
+### Konsequenz fuer die Zahlen in diesem Repo
+
+Die HIP-Werte in der Gegenprobe oben (338,13 pp512 / 11,37 tg128) stammen aus llama.cpp
+`b94041a` vom August und sind **nicht auf Korrektheit geprueft**. Sie koennen betroffen sein.
+Die Vulkan-Werte und alle Aussagen zu GTT, Quant-Auswahl, MoE-Overhead und spekulativem
+Decoding sind es nicht — die wurden auf dem Vulkan-Pfad gemessen.
+
+**Praxisregel fuer diese Hardware:** vor jeder GPU-Messung zuerst `llama-perplexity` gegen ein
+zweites Backend laufen lassen. Ein stiller Korrektheitsfehler ist auf gfx1151 wahrscheinlicher
+als ein Leistungsproblem, und er ist in Durchsatzzahlen unsichtbar.
+
 ## MoE-Overhead: der interessanteste Befund
 
 | Modell | Groesse | Prefill | Decode |
@@ -219,6 +279,8 @@ die Bandbreite der Engpass ist, hilft es nicht, weniger Bytes zu lesen.
 
 * ~~UMA auf `512M` gegenpruefen~~ — erledigt, GTT ist nicht langsamer als VRAM (siehe BENCHMARKS.md)
 * RADV-Fork `Nathanw1014/strix-halo-llamacpp` testen — belegt ~18,5 t/s plain, 21–27 mit Draft
-* llama.cpp aktualisieren (b94041a → aktuell)
+* ~~llama.cpp aktualisieren (b94041a → aktuell)~~ — gemessen am 2026-09-14, siehe HIP-Korrektheit
+* HIP-Werte der Gegenprobe (338/11,37) auf Korrektheit nachpruefen — moeglicherweise auf dem
+  fehlerhaften Backend entstanden
 * Prefill-Verhalten bei groesseren Kontexten (32k, 64k) vermessen
 * Groesseren Quant `UD-Q3_K_XL` (119 GiB) testen — passt seit der UMA-Umstellung
