@@ -1,0 +1,58 @@
+[
+ {
+  "etikett": "ohne-entwurf-mmap",
+  "ladezeit_s": 25,
+  "gtt_gib": 103.8,
+  "prompt_ts": 42.9,
+  "gen_ts": 18.4
+ },
+ {
+  "etikett": "ohne-entwurf-mlock",
+  "ladezeit_s": 56,
+  "gtt_gib": 103.8,
+  "prompt_ts": 43.1,
+  "gen_ts": 18.46
+ },
+ {
+  "etikett": "dspark-n1",
+  "ladezeit_s": 24,
+  "gtt_gib": 114.5,
+  "prompt_ts": 211.4,
+  "gen_ts": 20.03
+ },
+ {
+  "etikett": "dspark-n2",
+  "ladezeit_s": 24,
+  "gtt_gib": 114.5,
+  "prompt_ts": 205.6,
+  "gen_ts": 22.77
+ },
+ {
+  "etikett": "dspark-n3",
+  "ladezeit_s": 24,
+  "gtt_gib": 114.5,
+  "prompt_ts": 205.6,
+  "gen_ts": 20.53
+ },
+ {
+  "etikett": "dspark-n1-mlock",
+  "ladezeit_s": 26,
+  "gtt_gib": 114.5,
+  "prompt_ts": 205.9,
+  "gen_ts": 20.11
+ },
+ {
+  "etikett": "iq2-experten6",
+  "ladezeit_s": 19,
+  "gtt_gib": 91.4,
+  "prompt_ts": 225.7,
+  "gen_ts": 18.91
+ },
+ {
+  "etikett": "iq2-experten6-dspark-n2",
+  "ladezeit_s": 20,
+  "gtt_gib": 102.1,
+  "prompt_ts": 228.1,
+  "gen_ts": 26.25
+ }
+]

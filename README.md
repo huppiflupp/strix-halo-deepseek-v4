@@ -309,14 +309,22 @@ Zwei Einordnungen dazu:
 Mit `UD-IQ2_XXS` und DSpark kommen wir auf 26,25 t/s und damit auf 82 % ihres Decodewertes —
 bei sechs statt vier Experten und ohne sparse Prefill.
 
-### 8. Naechster Versuch: HIP mit `GGML_HIP_NO_VMM=ON`
+### 8. HIP nachgemessen -- eigener Befund: [HIP-BEFUND.md](HIP-BEFUND.md)
 
-Ihr Bau-Aufruf enthaelt `-DGGML_HIP_NO_VMM=ON`. Genau daran scheiterte unser August-Versuch:
-HIP meldete 112 GiB, kam aber nicht an GTT und konnte das Modell nicht laden. Der
-VMM-Allokator ist dafuer der uebliche Verdaechtige. Ein llama.cpp-Bau mit diesem Schalter
-laeuft; Ergebnis folgt. Zu pruefen ist dabei zweierlei: ob das Modell ueberhaupt laedt, und
-ob die Perplexitaet stimmt (auf gfx1151 rechnete HIP bis September still falsch, siehe
-[HIP-Korrektheit](#hip-korrektheit-das-backend-rechnete-still-falsch)).
+Ihr Bau-Aufruf enthaelt `-DGGML_HIP_NO_VMM=ON`, was zunaechst nach der fehlenden Zutat
+aussah. Es ist keine: Der Schalter ist in llama.cpp die Vorgabe. Gemessen wurde trotzdem,
+und das Ergebnis fuellt ein eigenes Dokument:
+
+* HIP **laedt** das 97-GiB-Modell (103 GiB GTT) -- der August-Befund ist ueberholt.
+* Vulkan ist bei gleicher Graphvariante **35 % / 37 %** schneller (pp512 / tg128).
+* Die **ROCm-Version aendert nichts** (7.1.1 gegen 7.2.1: gleich schnell).
+* HIP rechnet **modellabhaengig falsch**: DeepSeek-V4 korrekt (PPL 4,5637 gegen Vulkan
+  4,5736), Qwen3-1.7B Q8_0 unbrauchbar (PPL 24 000 bis 290 000 statt 16,5, zwischen Laeufen
+  schwankend).
+* Der Fork stuerzt unter HIP ohne `LLAMA_MOE_F16=0` ab (f16-Expertenaktivierungen fallen ins
+  CPU-Backend, das f32 erwartet).
+
+Einzelheiten, Eingrenzung und Rohdaten: **[HIP-BEFUND.md](HIP-BEFUND.md)**.
 
 ### Messvorschrift
 
