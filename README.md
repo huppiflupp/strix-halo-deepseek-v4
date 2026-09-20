@@ -468,6 +468,14 @@ DSpark-Entwurfsmodell, drei feste Prompts, Median:
 | IQ3_XXS + DSpark n=2 | 201,5 | 23,01 | 0,83 |
 | IQ2_XXS + DSpark n=2 | 253,5 | 27,46 | **0,98** |
 | **IQ2_XXS + DSpark n=3** | **261,7** | **28,91** | 0,81 |
+| IQ2_XXS + DSpark n=4 | 251,6 | 26,05 | 0,64 |
+| IQ2_XXS + DSpark n=5 | 252,7 | 25,06 | 0,65 |
+| IQ2_XXS + DSpark n=6 | 249,6 | 25,01 | 0,65 |
+
+n=3 ist das Optimum. Ab n=4 faellt die Annahmequote von 0,81 auf 0,64, und die zusaetzliche
+Pruefarbeit kostet mehr als die laengeren Entwuerfe einbringen. n=5 und n=6 liefern exakt
+dieselben Werte (195 von 299 angenommen, mittlere Laenge 4,25) -- das Modul gibt nicht mehr
+her, was zum protokollierten `n_extract=3` passt.
 
 Zum Vergleich der August-Stand: 11,96 Token/s Textausgabe in Mainline, 18,33 mit dem Fork.
 Wir sind also bei rund dem **2,4-fachen** des August-Werts und bei **90 %** der von Lucebox
@@ -505,6 +513,55 @@ Konsequenzen fuer weitere Messungen:
   frei sind -- der Seitencache eines vorangegangenen Ladevorgangs reicht, um es zu kippen.
 * Fuer Dauerbetrieb: **IQ3 ohne Entwurfsmodell oder IQ2 allein** sind die sicheren
   Konfigurationen. IQ2 mit Entwurfsmodell ist ein Messaufbau, kein Betriebszustand.
+
+### 13. Die Lucebox-Zahlen nachgebaut -- und was wirklich dahintersteckt
+
+Ihr Server ist offen (Apache-2.0, [Luce-Org/lucebox](https://github.com/Luce-Org/lucebox)),
+Modell und Entwurfsmodell liegen ungesperrt auf Hugging Face. Damit ist die Reproduktion
+moeglich. Aufbau: ihr `dflash_server` (Commit `e0048e0`), ihr
+`DeepSeek-V4-Flash-ROCMFP2-STRIX.gguf` (102,3 GB, ~2,88 bpw), ihr DSpark-Entwurf
+(11,3 GB), ihre Kommandozeile aus dem Blogbeitrag. **Einziger Unterschied: ROCm 7.1.1
+statt ihrer 7.2.4.**
+
+Beim Bau fehlt ihrer Anleitung eine Zutat fuer Fedora: `-DCMAKE_POSITION_INDEPENDENT_CODE=ON`
+(sonst scheitert das Binden mit `relocation R_X86_64_32 ... recompile with -fPIC`), und die
+rocWMMA-Suche greift nur nach `/opt/rocm/include` (`NO_DEFAULT_PATH`), weshalb
+`-DDFLASH27B_ROCWMMA_INCLUDE_DIR=/usr/include` noetig ist.
+
+Gemessen mit denselben drei Prompts wie alle Werte hier (rund 2000 Token Vorlauf, 256 Token
+Ausgabe); die Zahlen stammen aus **ihrem** Serverprotokoll, das Vorlauf und Ausgabe getrennt
+ausweist:
+
+| Konfiguration | Prompt-Vorlauf (Token/s) | Textausgabe (Token/s), Median | Annahmequote |
+|---|---|---|---|
+| ohne Entwurfsmodell, 4 Experten | ~411 | 22,8 | — |
+| mit DSpark q=4, 4 Experten | ~403 | **28,2** (Spitze 31,3) | 0,68-0,76 |
+| mit DSpark q=4, **6 Experten** | ~367 | 26,5 | 0,80 |
+
+**Ihre Angaben sind im Wesentlichen bestaetigt.** Die beworbenen "up to 32,0 tok/s" wurden
+mit 31,3 fast erreicht. Der Basiswert ohne Entwurf liegt mit 22,8 gegen ihre 25,31 rund
+10 % darunter -- die ROCm-Version ist die einzige verbliebene Abweichung, und laut
+Fremdliteratur kamen die nativen gfx1151-Kernel erst mit 7.2.
+
+**Was die Expertenreduktion wirklich bringt** (im Blogbeitrag ohne Zahl): von sechs auf vier
+Experten **+6,4 % Textausgabe** (26,5 -> 28,2) und **+11 % Prompt-Vorlauf** (367 -> 411),
+bei gleichzeitig sinkender Annahmequote des Entwurfsmodells (0,80 -> 0,69). Sechs Prozent
+Tempo fuer ein Drittel weniger Experten ist ein schlechter Tausch -- ihre eigene Warnung
+("trades some quality margin for speed") ist damit quantifiziert.
+
+**Der eigentliche Vergleich:**
+
+| | llama.cpp-Fork, IQ2_XXS + DSpark n=3 | Lucebox, ihr Modell, 4 Experten |
+|---|---|---|
+| Textausgabe (Token/s) | **28,91** | 28,2 (Spitze 31,3) |
+| Prompt-Vorlauf (Token/s) | 261,7 | **~411** |
+| Experten je Token | **6** | 4 |
+| Quantisierung | 2,06 bpw (IQ2_XXS) | ~2,88 bpw (ROCmFPX) |
+
+Beim Antworttempo ist llama.cpp gleichauf -- mit sechs statt vier Experten. **Ihr Vorsprung
+liegt im Prompt-Vorlauf: 57 %.** Das ist der Teil, fuer den sie eigene Wave32-Kernel
+geschrieben haben (siehe Abschnitt 7b), und fuer Agentenbetrieb mit grossem Startprompt der
+wichtigere. Wer lange Kontexte verarbeitet, gewinnt mit ihrem Server; wer chattet, nicht.
 
 ### Messvorschrift
 
