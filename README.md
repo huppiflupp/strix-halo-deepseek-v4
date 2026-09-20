@@ -32,6 +32,10 @@ unten sind damit ueberholt)
 * **V4-Flash ist nicht bandbreitenlimitiert:** ein 27-B-Dense-Modell decodiert gleich schnell,
   obwohl es pro Token 3x mehr Bytes liest. Der MoE-Overhead frisst den theoretischen Vorteil.
 
+* **Nebenmessung gpt-oss-120b** auf derselben Maschine (20.09.2026): `-ub 2048` bringt +33,5 %
+  Prompt-Verarbeitung, die Textausgabe liegt bei 85 % der Speicherbandbreite, EAGLE3 kostet
+  15 bis 46 % — siehe [GPT-OSS-120B.md](GPT-OSS-120B.md).
+
 ## Hardware / Software
 
 | | |
