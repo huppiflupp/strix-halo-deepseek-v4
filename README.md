@@ -3,7 +3,9 @@
 Messprotokoll zum lokalen Betrieb von **DeepSeek-V4-Flash-0731** (284 B MoE, 13 B aktiv)
 auf einem einzelnen AMD Ryzen AI MAX+ 395 mit 128 GB Unified Memory.
 
-Stand: 2026-08-18
+Stand: 2026-08-18, **Nachtrag 2026-09-20** (siehe
+[Nachtrag](#nachtrag-2026-09-20-was-ein-monat-fork-entwicklung-geaendert-hat) — drei Aussagen
+unten sind damit ueberholt)
 
 ## TL;DR
 
@@ -11,11 +13,15 @@ Stand: 2026-08-18
 * **24–28 t/s Decode** mit dem Fork `Nathanw1014/strix-halo-llamacpp` + DSpark-Draft —
   gegenüber 11,94 t/s in Mainline-llama.cpp. Der Softwarestack macht den Unterschied,
   nicht die Konfiguration.
-* **Spekulatives Decoding mit dem mitgelieferten `dspark`-Draft-Modell macht es langsamer**
-  (7,7 statt 11,9 t/s) — die Faustregel für dichte Modelle greift bei MoE nicht.
+* ~~**Spekulatives Decoding mit dem mitgelieferten `dspark`-Draft-Modell macht es langsamer**
+  (7,7 statt 11,9 t/s)~~ — **ueberholt am 2026-09-20**: mit dem eigenen Spekulationstyp
+  `--spec-type draft-dspark` bringt es **+24 %** (22,8 statt 18,4 t/s), und zwar bei
+  Entwurfslaenge 2, nicht 1. Siehe Nachtrag.
 * Die kursierenden „32 t/s auf Strix Halo" stammen **nicht** aus llama.cpp, sondern aus einem
   proprietären Server mit reduziertem Expert-Routing. Mit llama.cpp sind sie nicht reproduzierbar.
-* Prefill: **127 t/s** (pp512). Das beworbene 1-M-Kontextfenster bleibt dennoch theoretisch —
+* ~~Prefill: **127 t/s** (pp512).~~ **Ueberholt**: heute **206 t/s** bei Tiefe 0 und
+  **175 t/s** noch bei 32k Kontext — davon +24 % allein durch die MoE-Kernel des Forks
+  (`GGML_VK_MMID_*`), der Rest durch `-b 2048`. Das beworbene 1-M-Kontextfenster bleibt dennoch theoretisch —
   es wären ~2,2 Stunden reiner Prefill —, aber 32k/64k sind gut machbar.
 * **Das HIP-Backend rechnete bis Anfang September still falsch** (Perplexity 727 statt 7,0 auf
   gfx1151) — bei identischem Durchsatz, also fuer jeden Benchmark unsichtbar. Auf aktuellem
@@ -121,6 +127,10 @@ Fuenffachen. Der Decode-Wert dagegen deckt sich exakt (11,9 vs. 11,94).
 
 ### Warum spekulatives Decoding hier bremst
 
+> **Ueberholt (2026-09-20).** Mit `--spec-type draft-dspark` bringt das Entwurfsmodell
+> +24 % statt zu bremsen, und die Byte-Rechnung unten war zu grob. Siehe
+> [Nachtrag, Abschnitt 1](#1-spekulatives-decoding-hilft-jetzt--mit-laenge-2-nicht-1).
+
 Ein Draft-Modell lohnt sich nur, wenn es **pro Token deutlich billiger** ist als das
 Hauptmodell. Auf bandbreitenlimitierter Hardware zählt dafür, wie viele Bytes pro Token
 gelesen werden:
@@ -132,7 +142,142 @@ Das Draft-Modell ist also rund **doppelt so teuer** wie das MoE, das es beschleu
 Selbst bei perfekter Trefferquote bliebe kein Gewinn. Die aus dichten Modellen bekannte
 Faustregel „Draft-Modell = größter Hebel" kehrt sich bei MoE mit kleinem aktivem Anteil um.
 
+
+## Nachtrag 2026-09-20: was ein Monat Fork-Entwicklung geaendert hat
+
+Alle Zahlen dieses Abschnitts: derselbe Rechner, Nobara 44 / Kernel 7.2, Fork-Build
+`strix-fork/vulkan` (ggml 0.20.1), Modell `UD-IQ3_XXS`, Entwurfsmodell
+`dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf` (10,9 GB), `-fa on -b 2048 -ub 512`.
+Die anderen Dienste der Maschine waren gestoppt; GTT-Grenze 120 GiB
+(`ttm.pages_limit=31457280`), belegt 103,8 GiB ohne und 114,5 GiB mit Entwurfsmodell.
+
+### 1. Spekulatives Decoding hilft jetzt — mit Laenge 2, nicht 1
+
+Der Fork kennt inzwischen `--spec-type draft-dspark` als eigenen Typ; im August lief DSpark
+nur ueber den generischen Entwurfspfad. Gemessen an drei festen Prompts (Median, je 256 Token):
+
+| Lauf | Generierung | Annahmequote | mittlere Entwurfslaenge |
+|---|---|---|---|
+| ohne Entwurf | 18,40 t/s | — | — |
+| DSpark n=1 | 20,03 t/s | 0,68 | 1,68 |
+| **DSpark n=2** | **22,77 t/s** | 0,61 | 2,23 |
+| DSpark n=3 | 20,53 t/s | 0,30 | 1,91 |
+| DSpark n=1 + `mlock` | 20,11 t/s | 0,68 | 1,68 |
+
+Die Erwartung, dass bei einer MTP-Tiefe von 1 auch n=1 optimal sei, trifft nicht zu: n=2
+liegt 14 % darueber. Die Annahmequote sinkt zwar mit der Laenge, aber bis n=2 ueberwiegt
+der Gewinn aus zwei Token je Schritt. Bei n=3 kippt es — dort ist die Stichprobe allerdings
+klein (66 Entwurfstoken), das sollte man nicht ueberbewerten.
+
+**Damit ist die Begruendung aus dem August-Abschnitt "Warum spekulatives Decoding hier bremst"
+widerlegt.** Die dortige Rechnung setzte die volle Dateigroesse des Entwurfsmodells
+(10,5 GiB) als Verkehr je Token an und kam so auf "doppelt so teuer wie das MoE". Das trifft
+nicht zu: Der groesste Teil der Datei sind Embedding- und Ausgabematrix, von denen je Token
+nur ein Bruchteil gelesen wird. Was davon auf den eigenen Spekulationstyp und was auf die
+korrigierte Buchhaltung entfaellt, ist damit noch nicht getrennt.
+
+### 2. Die MoE-Kernel des Forks verbessern den Prefill, nicht die Generierung
+
+Der Fork setzt mehrere MoE-Optimierungen per Vorgabe (`GGML_VK_MMID_ROWLISTS`, `_SMALLN`,
+`_BM64`, `_WAVE32`, `_F16B`, `_M128`), die sich einzeln auf `0` setzen lassen. Derselbe Build,
+zweimal gefahren, nur diese Schalter umgelegt (die Flash-Attention-Schalter blieben in beiden
+Laeufen an, sonst waere der Vergleich nicht auf MoE-Matmul beschraenkt):
+
+| Messung | MMID an | MMID aus | Gewinn |
+|---|---|---|---|
+| pp512 @ Tiefe 0 | 206,53 t/s | 166,08 t/s | **+24,4 %** |
+| pp512 @ Tiefe 8192 | 186,56 t/s | 146,72 t/s | **+27,2 %** |
+| pp512 @ Tiefe 32768 | 174,64 t/s | 142,82 t/s | **+22,3 %** |
+| tg128 @ Tiefe 0 | 18,70 t/s | 18,69 t/s | +0,1 % |
+| tg128 @ Tiefe 8192 | 17,93 t/s | 17,94 t/s | −0,0 % |
+| tg128 @ Tiefe 32768 | 17,03 t/s | 17,03 t/s | ±0,0 % |
+
+(`llama-bench -fa 1 -p 512 -n 128 -d 0,8192,32768 -r 2`, Streuung der Generierungswerte
+0,00–0,02 t/s.)
+
+Die Generierung ist auf zwei Nachkommastellen identisch — kein schwacher Effekt, sondern
+keiner. Der Gewinn liegt vollstaendig im Prefill und bleibt auch bei 32k Kontext erhalten.
+
+### 3. Kontexttiefe: milder Abfall
+
+Von Tiefe 0 auf 32768 verliert der Prefill 15 % und die Generierung 9 %. Fuer den
+Agentenbetrieb ist der Prefill die entscheidende Zahl:
+
+| Stand | pp512 | 15k Startprompt |
+|---|---|---|
+| August 2026 (127 t/s, `-b 512`, ohne MMID) | 127 t/s | 2,0 min |
+| heute ohne MMID | 166 t/s | 1,5 min |
+| **heute mit MMID** | **206 t/s** | **1,2 min** |
+
+Der Sprung von 127 auf 166 t/s stammt nicht aus den MoE-Kerneln, sondern aus der groesseren
+Batchgroesse und dem neueren Build; diese beiden sind hier nicht getrennt gemessen.
+
+### 4. `mlock` gegen `mmap`: kein Unterschied
+
+Die Vermutung, dass bei nur ~13 GiB freiem RAM der Seitencache-Druck bremst, bestaetigt sich
+nicht:
+
+| Ladeart | Ladezeit | GTT | Generierung |
+|---|---|---|---|
+| `--load-mode auto` (mmap) | 25 s | 103,8 GiB | 18,40 t/s |
+| `--load-mode mlock` | 56 s | 103,8 GiB | 18,46 t/s |
+
+0,3 % Unterschied bei mehr als doppelter Ladezeit. Plausibler Grund: Die Gewichte liegen
+ohnehin im GTT, also in GPU-adressiertem Speicher, nicht im Seitencache — der schrumpfte
+waehrend der Messung auf 2 GiB, ohne die Rate zu beruehren.
+
+### 5. Reduziertes Expert-Routing laesst sich mit llama.cpp nicht zuschalten
+
+Der Versuch, das Lucebox-Profil (top-k 4 statt 6) per Metadaten nachzustellen, scheitert
+am Modellbau — und das praezisiert die Einordnung weiter unten:
+
+```
+$ llama-server -m ...UD-IQ3_XXS...gguf --override-kv deepseek4.expert_used_count=int:4
+error loading model: check_tensor_dims: tensor 'blk.0.ffn_gate_tid2eid.weight'
+has wrong shape; expected 4, 129280, got 6, 129280
+```
+
+DeepSeek-V4 traegt die Zahl der aktiven Experten nicht nur als Metadatum, sondern als
+Routing-Tabelle im Tensor `blk.N.ffn_gate_tid2eid.weight` (Form 6 x 129280). `--override-kv`
+aendert nur das Metadatum, danach schlaegt die Formpruefung fehl. Ein Betrieb mit vier
+Experten braucht also ein neu gebautes GGUF, keinen Startschalter — die kursierenden Zahlen
+bleiben mit Standard-llama.cpp unerreichbar, und zwar aus diesem Grund.
+
+Die GGUF-Metadaten des verwendeten Quants zur Einordnung:
+
+| Schluessel | Wert |
+|---|---|
+| `deepseek4.expert_count` | 256 |
+| `deepseek4.expert_used_count` | 6 |
+| `deepseek4.expert_shared_count` | 1 |
+| `deepseek4.block_count` | 43 |
+| `deepseek4.context_length` | 1 048 576 |
+| `deepseek4.rope.scaling.original_context_length` | 65 536 |
+
+### Messvorschrift
+
+Die Skripte liegen nicht in diesem Repo, sondern entstanden ad hoc; die Kernbefehle:
+
+```bash
+# Durchsatz je Konfiguration (llama-server + drei feste Prompts, Median)
+llama-server -m .../UD-IQ3_XXS/...-00001-of-00004.gguf -ngl 999 -fa on -c 16384 \
+  -b 2048 -ub 512 --jinja -np 1 \
+  -md .../dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf -ngld 999 \
+  --spec-type draft-dspark --spec-draft-n-max 2
+
+# MMID-Isolierung (derselbe Build, nur Schalter)
+GGML_VK_MMID_ROWLISTS=0 GGML_VK_MMID_SMALLN=0 GGML_VK_MMID_BM64=0 \
+GGML_VK_MMID_WAVE32=0 GGML_VK_MMID_F16B=0 GGML_VK_MMID_M128=0 \
+llama-bench -m ... -fa 1 -p 512 -n 128 -d 0,8192,32768 -r 2
+```
+
+Die Annahmequote steht im Serverprotokoll: `draft acceptance = 0.61404 (140 accepted /
+228 generated), mean len = 2.23`.
+
 ## Einordnung der kursierenden Benchmarks
+
+> **Ergaenzt (2026-09-20).** Warum das reduzierte Expert-Routing mit llama.cpp nicht
+> nachstellbar ist, steht jetzt belegt im [Nachtrag, Abschnitt 5](#5-reduziertes-expert-routing-laesst-sich-mit-llamacpp-nicht-zuschalten).
 
 Die vielzitierten **32 t/s decode** auf dem Ryzen AI MAX+ 395 stammen von Lucebox und wurden
 **nicht mit llama.cpp** gemessen, sondern mit einem proprietären `dflash_server`, eigenem
@@ -297,5 +442,8 @@ die Bandbreite der Engpass ist, hilft es nicht, weniger Bytes zu lesen.
 * RADV-Fork `Nathanw1014/strix-halo-llamacpp` testen — belegt ~18,5 t/s plain, 21–27 mit Draft
 * ~~llama.cpp aktualisieren (b94041a → aktuell)~~ — gemessen am 2026-09-14, siehe HIP-Korrektheit
 * ~~HIP-Werte der Gegenprobe auf Korrektheit nachpruefen~~ — erledigt, sie waren betroffen (PPL 663 statt 5,57); korrigierte Tabelle im Abschnitt HIP-Korrektheit
-* Prefill-Verhalten bei groesseren Kontexten (32k, 64k) vermessen
+* ~~Prefill-Verhalten bei groesseren Kontexten (32k, 64k) vermessen~~ — erledigt 2026-09-20, siehe Nachtrag
+* ~~Reduziertes Expert-Routing (`--override-kv deepseek4.expert_used_count=int:4`) pruefen~~ —
+  geht nicht, siehe Nachtrag Abschnitt 5 (Routing-Tabelle liegt als Tensor vor)
+* `UD-IQ2_XXS` (85 GiB) gegen `UD-IQ3_XXS` messen, Durchsatz und Perplexitaet — laeuft
 * Groesseren Quant `UD-Q3_K_XL` (119 GiB) testen — passt seit der UMA-Umstellung
