@@ -458,6 +458,54 @@ groesste Prompt-Vorlauf-Hebel fuer gfx1151 (5472,89 ± 135,48 gegen 5533,75 ± 2
 auf Qwen3-1.7B). Die nativen gfx1151-Kernel dafuer kamen erst mit ROCm 7.2; wir laufen auf
 7.1.1.
 
+### 11. Bestwert auf dieser Maschine (Stand 2026-09-20)
+
+Quelltext-Build des Forks mit System-RADV (nicht das Payload mit gebuendeltem RADV),
+DSpark-Entwurfsmodell, drei feste Prompts, Median:
+
+| Konfiguration | Prompt-Verarbeitung (Token/s) | Textausgabe (Token/s) | Annahmequote |
+|---|---|---|---|
+| IQ3_XXS + DSpark n=2 | 201,5 | 23,01 | 0,83 |
+| IQ2_XXS + DSpark n=2 | 253,5 | 27,46 | **0,98** |
+| **IQ2_XXS + DSpark n=3** | **261,7** | **28,91** | 0,81 |
+
+Zum Vergleich der August-Stand: 11,96 Token/s Textausgabe in Mainline, 18,33 mit dem Fork.
+Wir sind also bei rund dem **2,4-fachen** des August-Werts und bei **90 %** der von Lucebox
+genannten 32,0 Token/s -- mit sechs statt vier Experten. Beim Prompt-Vorlauf liegen die
+261,7 Token/s **ueber** deren 250.
+
+Bei IQ2 nimmt das Hauptmodell 98 % der Entwurfstoken an, deshalb lohnt dort die laengere
+Entwurfstiefe; bei IQ3 (Annahmequote 0,83) nicht. Das Entwurfsmodul arbeitet laut
+Serverprotokoll intern mit `block_size=5, n_extract=3`, ist also kein freilaufendes
+Entwurfsmodell, sondern eine Maskierungsvorhersage fester Breite -- was erklaert, warum
+n=3 gut passt.
+
+### 12. Warnung: IQ2 mit Entwurfsmodell steht an der Speichergrenze
+
+Beim Versuch, n=4 zu messen, blieb der Treiber stehen:
+
+```
+[drm:amdgpu_gem_va_update_vm] *ERROR* Couldn't update BO_VA (-12)
+INFO: task llama-server blocked for more than 245 seconds.
+```
+
+`-12` ist ENOMEM. 85 GiB Modell + 10,6 GiB Entwurfsmodell + Kontextspeicher bei 108 von
+124 GB belegtem Arbeitsspeicher reichten nicht mehr fuer die Adressraum-Aktualisierung.
+Der Prozess landete im nicht unterbrechbaren Kernelzustand und ueberlebte auch `SIGKILL`;
+`systemctl stop` blockierte daraufhin ebenfalls.
+
+**Auf dieser APU gibt es keinen Ausweg ausser einem Neustart:** `reset_method = -1`, und
+der debugfs-Pfad `amdgpu_gpu_recover` verweigert den Schreibzugriff selbst als root, weil
+die GPU zugleich die Anzeige treibt.
+
+Konsequenzen fuer weitere Messungen:
+
+* Kontext klein halten (`-c 4096` statt 16384), wenn nur kurze Antworten gemessen werden.
+* Vor jedem Serverstart warten, bis GTT unter 10 GiB und mehr als 100 GB Arbeitsspeicher
+  frei sind -- der Seitencache eines vorangegangenen Ladevorgangs reicht, um es zu kippen.
+* Fuer Dauerbetrieb: **IQ3 ohne Entwurfsmodell oder IQ2 allein** sind die sicheren
+  Konfigurationen. IQ2 mit Entwurfsmodell ist ein Messaufbau, kein Betriebszustand.
+
 ### Messvorschrift
 
 Die Skripte liegen nicht in diesem Repo, sondern entstanden ad hoc; die Kernbefehle:
