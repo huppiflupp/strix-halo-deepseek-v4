@@ -19,9 +19,9 @@ unten sind damit ueberholt)
   Entwurfslaenge 2, nicht 1. Siehe Nachtrag.
 * Die kursierenden „32 t/s auf Strix Halo" stammen **nicht** aus llama.cpp, sondern aus einem
   proprietären Server mit reduziertem Expert-Routing. Mit llama.cpp sind sie nicht reproduzierbar.
-* ~~Prefill: **127 t/s** (pp512).~~ **Ueberholt**: heute **206 t/s** bei Tiefe 0 und
-  **175 t/s** noch bei 32k Kontext — davon +24 % allein durch die MoE-Kernel des Forks
-  (`GGML_VK_MMID_*`), der Rest durch `-b 2048`. Das beworbene 1-M-Kontextfenster bleibt dennoch theoretisch —
+* ~~Prefill: **127 t/s** (pp512).~~ **Ueberholt**: heute **207 bis 234 Token/s** bei leerem
+  Kontext und **175 Token/s** noch bei 32k Kontext. (Die urspruengliche Aufteilung "+24 %
+  davon durch die MoE-Kernel" ist zurueckgezogen, siehe Nachtrag Abschnitt 2.) Das beworbene 1-M-Kontextfenster bleibt dennoch theoretisch —
   es wären ~2,2 Stunden reiner Prefill —, aber 32k/64k sind gut machbar.
 * **Das HIP-Backend rechnete bis Anfang September still falsch** (Perplexity 727 statt 7,0 auf
   gfx1151) — bei identischem Durchsatz, also fuer jeden Benchmark unsichtbar. Auf aktuellem
@@ -176,27 +176,47 @@ nicht zu: Der groesste Teil der Datei sind Embedding- und Ausgabematrix, von den
 nur ein Bruchteil gelesen wird. Was davon auf den eigenen Spekulationstyp und was auf die
 korrigierte Buchhaltung entfaellt, ist damit noch nicht getrennt.
 
-### 2. Die MoE-Kernel des Forks verbessern den Prefill, nicht die Generierung
+### 2. ZURUECKGEZOGEN: "MoE-Kernel verbessern nur den Prefill"
 
-Der Fork setzt mehrere MoE-Optimierungen per Vorgabe (`GGML_VK_MMID_ROWLISTS`, `_SMALLN`,
-`_BM64`, `_WAVE32`, `_F16B`, `_M128`), die sich einzeln auf `0` setzen lassen. Derselbe Build,
-zweimal gefahren, nur diese Schalter umgelegt (die Flash-Attention-Schalter blieben in beiden
-Laeufen an, sonst waere der Vergleich nicht auf MoE-Matmul beschraenkt):
+**Diese Messung war ungueltig und ist am selben Tag zurueckgezogen worden.** Sie verglich
+`GGML_VK_MMID_*=1` gegen `GGML_VK_MMID_*=0` und fand +24 % Prompt-Verarbeitung bei
+unveraenderter Textausgabe. Die Gegenprobe zeigte hinterher: **mit allen MMID-Schaltern auf 0
+rechnet das Modell `nan`** (Perplexitaet nicht bestimmbar, "Unexpected negative standard
+deviation of log(prob)"). Verglichen wurde also korrektes Rechnen gegen kaputtes Rechnen --
+die Zahlen messen nichts.
 
-| Messung | MMID an | MMID aus | Gewinn |
+Lehre daraus, die hier schon zweimal teuer war: **Auch der Lauf mit abgeschalteter
+Optimierung braucht eine Korrektheitsprobe.** Es genuegt nicht, den optimierten Fall zu
+pruefen.
+
+Was stattdessen gilt, sauber gemessen:
+
+**a) Der Fork gegen aktuelles Upstream** (beide korrekt, Perplexitaeten deckungsgleich) --
+siehe [Abschnitt 9](#9-braucht-man-den-fork-noch-upstream-gegen-fork-gemessen).
+
+**b) Die einzelnen Schalter, jeder mit Korrektheitsprobe.** Qwen3.6-35B-A3B UD-IQ4_XS,
+`llama-bench -fa 1 -p 512 -n 128 -r 2`, jeweils ein Schalter auf 0, Rest auf Vorgabe:
+
+| abgeschaltet | Prompt-Verarbeitung (Token/s) | gegen Vorgabe | Perplexitaet (3 Bloecke) |
 |---|---|---|---|
-| pp512 @ Tiefe 0 | 206,53 t/s | 166,08 t/s | **+24,4 %** |
-| pp512 @ Tiefe 8192 | 186,56 t/s | 146,72 t/s | **+27,2 %** |
-| pp512 @ Tiefe 32768 | 174,64 t/s | 142,82 t/s | **+22,3 %** |
-| tg128 @ Tiefe 0 | 18,70 t/s | 18,69 t/s | +0,1 % |
-| tg128 @ Tiefe 8192 | 17,93 t/s | 17,94 t/s | −0,0 % |
-| tg128 @ Tiefe 32768 | 17,03 t/s | 17,03 t/s | ±0,0 % |
+| nichts (Fork-Vorgabe) | 1569,1 | — | 6,5915 |
+| `GGML_VK_MMID_ROWLISTS` | 1439,7 | −8,2 % | 6,5915 |
+| `GGML_VK_MMID_SMALLN` | 1449,9 | −7,6 % | 6,5915 |
+| `GGML_VK_MMID_BM64` | 1484,6 | −5,4 % | 6,5915 |
+| `GGML_VK_FA_WAVE32` | 1535,5 | −2,1 % | 6,5915 |
+| `GGML_VK_FA_KV_CONTIG` | 1542,5 | −1,7 % | 6,5915 |
+| `GGML_VK_MMID_M128` | 1560,7 | −0,5 % | 6,5915 |
+| Upstream `a894dae` (ohne all das) | 1280,0 | −18,4 % | 5,7159 (10 Bloecke) |
 
-(`llama-bench -fa 1 -p 512 -n 128 -d 0,8192,32768 -r 2`, Streuung der Generierungswerte
-0,00–0,02 t/s.)
+Die Textausgabe blieb in allen Faellen bei 62,2 bis 62,5 Token/s -- die Kniffe wirken
+tatsaechlich nur auf die Prompt-Verarbeitung, aber der Beleg dafuer sind diese Zeilen,
+nicht die zurueckgezogene Messung.
 
-Die Generierung ist auf zwei Nachkommastellen identisch — kein schwacher Effekt, sondern
-keiner. Der Gewinn liegt vollstaendig im Prefill und bleibt auch bei 32k Kontext erhalten.
+**Zwei Schalter darf man nicht abschalten:**
+
+* `GGML_VK_MMID_WAVE32=0` ergibt scheinbar **2216 Token/s** statt 1569 (+41 %) -- und
+  `nan` in der Perplexitaet. Der Schalter traegt die Korrektheit des MoE-Pfads mit.
+* `GGML_VK_MMID_F16B=0` stuerzt beim Start ab (`ggml_abort`).
 
 ### 3. Kontexttiefe: milder Abfall
 
