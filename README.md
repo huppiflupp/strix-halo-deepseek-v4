@@ -254,6 +254,70 @@ Die GGUF-Metadaten des verwendeten Quants zur Einordnung:
 | `deepseek4.context_length` | 1 048 576 |
 | `deepseek4.rope.scaling.original_context_length` | 65 536 |
 
+### 6. IQ2_XXS gegen IQ3_XXS: schneller nur im Entwurfsbetrieb, und teuer erkauft
+
+| | UD-IQ3_XXS (104 GB) | UD-IQ2_XXS (91 GB) |
+|---|---|---|
+| GTT belegt | 103,8 GiB | 91,4 GiB |
+| Generierung ohne Entwurf | 18,40 t/s | 18,91 t/s (+2,8 %) |
+| Generierung mit DSpark n=2 | 22,77 t/s | **26,25 t/s** (+15 %) |
+| Annahmequote | 0,61 | 0,70 |
+| pp512 @ Tiefe 0 | 206,5 t/s | 225,7 t/s |
+| **Perplexitaet** (wikitext, 20 Bloecke a 2048) | **4,573 ± 0,080** | **5,213 ± 0,094** |
+
+Bemerkenswert ist die Aufteilung: Im nackten Decode bringt die kleinere Quantisierung fast
+nichts (+2,8 %), im spekulativen Betrieb dagegen deutlich (+15 %) — weil die Annahmequote
+des Entwurfsmodells steigt (0,70 statt 0,61). Das Entwurfsmodell trifft offenbar leichter,
+wenn das Hauptmodell selbst unschaerfer ist.
+
+Bezahlt wird das mit **14 % hoeherer Perplexitaet**. Das ist viel: Das Modell ist
+quantization-aware in MXFP4 trainiert, weiteres Herunterquantisieren ist doppelte
+Quantisierung (siehe Abschnitt Quant-Auswahl). Fuer 3,5 t/s mehr wuerde ich IQ2 nicht nehmen.
+
+### 7. Die Lucebox-Zahlen im direkten Vergleich
+
+Der [Blogbeitrag von Lucebox](https://www.lucebox.com/blog/deepseek-v4-strix-halo) nennt
+inzwischen den vollstaendigen Aufbau, damit ist der Vergleich sauber moeglich:
+
+| | Lucebox | dieses Repo (2026-09-20) |
+|---|---|---|
+| Server | `dflash_server` (proprietaer), HIP, ROCm 7.2.4 | llama.cpp-Fork, Vulkan/RADV |
+| Modell | `DeepSeek-V4-Flash-ROCMFP2-STRIX.gguf`, 102,3 GB, ~2,88 bpw | `UD-IQ3_XXS`, 104 GB, 3,06 bpw |
+| Experten je Token | **4** (`--ds4-expert-top-k 4`) | 6 (Modellvorgabe) |
+| Prefill | ~250 t/s, `--ds4-prefill sparse` | 206,5 t/s, dicht |
+| Decode ohne Entwurf | 25,31 t/s | 18,40 t/s |
+| Decode mit DSpark | **32,0 t/s** (`DFLASH_DS4_SPEC_Q=4`, fused verify) | 22,77 t/s (n=2) |
+| Kontext der Messung | 8192 | 16384 (Tiefen 0/8192/32768 getrennt) |
+| **relativer Gewinn durch Spekulation** | **+26 %** | **+24 %** |
+
+Die letzte Zeile ist der eigentliche Befund: **Der Nutzen des Entwurfsmodells ist bei beiden
+praktisch gleich.** Die Differenz entsteht nicht beim spekulativen Decoding, sondern in der
+Grundmaschine — Expertenzahl, Quantisierung, Backend, Prefill-Pfad.
+
+Zwei Einordnungen dazu:
+
+* **Der Prefill-Vergleich ist kein Vergleich gleicher Arbeit.** Sparse Prefill nutzt laut
+  Lucebox den *gelernten Indexer des Modells* ("built into the model itself rather than
+  added as post-hoc approximation"), um die Aufmerksamkeit auf komprimierte Historie zu
+  begrenzen. llama.cpp kennt diesen Pfad nicht und rechnet dicht. 206 t/s dicht gegen
+  250 t/s sparse sind also nicht 18 % Rueckstand, sondern zwei verschiedene Verfahren.
+* **Die vier Experten sind kein Gratis-Hebel, und Lucebox sagt das selbst:** "This changes
+  model execution and trades some quality margin for speed", mit der Empfehlung, vor dem
+  Produktiveinsatz gegen sechs Experten zu vergleichen. Eine Perplexitaetsangabe zu den vier
+  Experten nennt der Beitrag nicht.
+
+Mit `UD-IQ2_XXS` und DSpark kommen wir auf 26,25 t/s und damit auf 82 % ihres Decodewertes —
+bei sechs statt vier Experten und ohne sparse Prefill.
+
+### 8. Naechster Versuch: HIP mit `GGML_HIP_NO_VMM=ON`
+
+Ihr Bau-Aufruf enthaelt `-DGGML_HIP_NO_VMM=ON`. Genau daran scheiterte unser August-Versuch:
+HIP meldete 112 GiB, kam aber nicht an GTT und konnte das Modell nicht laden. Der
+VMM-Allokator ist dafuer der uebliche Verdaechtige. Ein llama.cpp-Bau mit diesem Schalter
+laeuft; Ergebnis folgt. Zu pruefen ist dabei zweierlei: ob das Modell ueberhaupt laedt, und
+ob die Perplexitaet stimmt (auf gfx1151 rechnete HIP bis September still falsch, siehe
+[HIP-Korrektheit](#hip-korrektheit-das-backend-rechnete-still-falsch)).
+
 ### Messvorschrift
 
 Die Skripte liegen nicht in diesem Repo, sondern entstanden ad hoc; die Kernbefehle:
