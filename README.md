@@ -316,11 +316,16 @@ Grundmaschine — Expertenzahl, Quantisierung, Backend, Prefill-Pfad.
 
 Zwei Einordnungen dazu:
 
-* **Der Prefill-Vergleich ist kein Vergleich gleicher Arbeit.** Sparse Prefill nutzt laut
-  Lucebox den *gelernten Indexer des Modells* ("built into the model itself rather than
-  added as post-hoc approximation"), um die Aufmerksamkeit auf komprimierte Historie zu
-  begrenzen. llama.cpp kennt diesen Pfad nicht und rechnet dicht. 206 t/s dicht gegen
-  250 t/s sparse sind also nicht 18 % Rueckstand, sondern zwei verschiedene Verfahren.
+* **KORREKTUR (nachgeprueft am Quelltext): llama.cpp rechnet ebenfalls duenn.** Die
+  urspruengliche Fassung dieses Punktes behauptete, llama.cpp kenne den Indexer-Pfad nicht
+  und rechne dicht. Das ist falsch. Sowohl Upstream als auch der Fork implementieren die
+  DeepSeek Sparse Attention: `build_attn_inp_k_dsa`, "fused lightning indexer",
+  `kq_mask_top_k`, eigener Indexer-Schluesselcache fuer die MSA-Schichten
+  (`is_indexer_full`). Die GGUF traegt die zugehoerigen Metadaten
+  (`deepseek4.attention.indexer.head_count` = 64, `.key_length` = 128, `.top_k` = 512) und
+  60 Indexer-Tensoren je Teildatei. Unsere 233,7 Token/s sind also bereits duenne
+  Aufmerksamkeit, und der Abstand zu Luceboxs 250 Token/s betraegt **7 %**, nicht 18 % --
+  bei gleichem Verfahren.
 * **Die vier Experten sind kein Gratis-Hebel, und Lucebox sagt das selbst:** "This changes
   model execution and trades some quality margin for speed", mit der Empfehlung, vor dem
   Produktiveinsatz gegen sechs Experten zu vergleichen. Eine Perplexitaetsangabe zu den vier
@@ -328,6 +333,45 @@ Zwei Einordnungen dazu:
 
 Mit `UD-IQ2_XXS` und DSpark kommen wir auf 26,25 t/s und damit auf 82 % ihres Decodewertes —
 bei sechs statt vier Experten und ohne sparse Prefill.
+
+
+### 7b. Was Lucebox technisch anders macht: eigene Wave32-Kernel
+
+Ihr Bau schaltet mit `-DDFLASH27B_HIP_SM80_EQUIV=ON` einen eigenen rocWMMA-Prefill-Kernel
+ein. Das klingt zunaechst widerspruechlich, weil rocWMMA-Flash-Attention in llama.cpp auf
+gfx1151 als Bremse galt ([#24437](https://github.com/ggml-org/llama.cpp/issues/24437):
+bis −41 % Prompt-Verarbeitung). Der Widerspruch loest sich am Quelltext:
+
+* **rocWMMA ist eine Bibliothek, keine Optimierung.** Sie stellt die Matrixbefehle bereit;
+  entscheidend ist, welcher Kernel damit geschrieben wurde.
+* **llama.cpps rocWMMA-Pfad stammte aus der CDNA-Welt** (Wave64, andere Kachelgroessen) und
+  wurde auf RDNA3.5 mitbenutzt -- daher die Regression. **In aktuellem llama.cpp existiert
+  er nicht mehr**: weder Upstream `a894dae` noch der Fork enthalten eine Erwaehnung von
+  rocWMMA, die Option `GGML_HIP_ROCWMMA_FATTN` gibt es dort nicht. Sie steht nur noch im
+  mitgelieferten llama.cpp von Lucebox (ggml 0.9.11), dort mit Vorgabe `OFF`.
+* **Luceboxs Kernel ist fuer RDNA geschrieben.** `server/src/flashprefill_kernels.hip.cu`,
+  781 Zeilen, bricht den Bau ab, wenn die Wellenbreite nicht 32 ist: *"A wave64 target would
+  need a different WMMA instruction and fragment layout, not a warp-width tweak, so we fail
+  the build loudly rather than emit silently-wrong results."*
+
+Der Dateikopf dokumentiert die Portierung aus ihrer CUDA-Fassung: `nvcuda::wmma` →
+`rocwmma`, `cp.async` → direkte `uint4`-Ladebefehle, `__shfl_xor_sync` → `__shfl_xor`, und
+vor allem die geaenderte Akkumulator-Anordnung (NVIDIA: zwei Zeilen je Lane; AMD RDNA3
+Wave32: eine Zeile je Lane), wofuer Maskierung, Softmax und Rescale neu geschrieben wurden.
+
+**Portierbarkeit nach llama.cpp**, falls jemand es versuchen will:
+
+| | |
+|---|---|
+| Umfang | 781 Zeilen, eine Datei, fuenf Kernel (Mittelwertvektor, Blockbewertung ×2, Blockauswahl, duenne Flash-Attention, KV-Transposition) |
+| Abhaengigkeiten | nur `hip_runtime.h`, `hip_bfloat16.h`, `rocwmma.hpp` -- kein projekteigener Header |
+| Schnittstelle | vier `extern "C"`-Einstiegspunkte mit rohen Zeigern |
+| Lizenz | Apache-2.0 (llama.cpp ist MIT) |
+
+Dagegen sprechen drei Dinge: llama.cpp **hat** den duennen Pfad bereits (man wuerde ersetzen,
+nicht ergaenzen); es ist ein **HIP**-Kernel, waehrend Vulkan hier das schnellere Backend ist;
+und die Lizenzen passen nicht ohne Weiteres zusammen. Der praktischere Weg ist, ihren Server
+direkt zu benutzen.
 
 ### 8. HIP nachgemessen -- eigener Befund: [HIP-BEFUND.md](HIP-BEFUND.md)
 
