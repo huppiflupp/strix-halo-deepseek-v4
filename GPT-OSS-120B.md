@@ -1,172 +1,173 @@
-# gpt-oss-120b auf Strix Halo: welche Einstellungen wirken
+# gpt-oss-120b on Strix Halo: which settings actually matter
 
-Nebenmessung zum DeepSeek-Protokoll dieses Repos, Messtag 2026-09-20. Rohdaten und Skripte:
-[`messungen/2026-09-20/gptoss-sweep.log`](messungen/2026-09-20/gptoss-sweep.log),
+A side measurement to the DeepSeek protocol in this repository, taken on 2026-09-20. Raw data
+and scripts: [`messungen/2026-09-20/gptoss-sweep.log`](messungen/2026-09-20/gptoss-sweep.log),
 [`gptoss-sweep.sh`](messungen/2026-09-20/gptoss-sweep.sh),
-[`gptoss-ppl.log`](messungen/2026-09-20/gptoss-ppl.log).
+[`gptoss-ppl.log`](messungen/2026-09-20/gptoss-ppl.log). (The rest of this repository is in
+German; this file is in English on purpose.)
 
 | | |
 |---|---|
-| Maschine | AMD Ryzen AI MAX+ 395, Radeon 8060S (gfx1151), 128 GB LPDDR5X-8000 unified |
-| System | Nobara 44, Kernel 7.2.6, Mesa RADV (System), GTT-Grenze 120 GiB |
-| Modell | `ggml-org/gpt-oss-120b-GGUF`, `gpt-oss-120b-MXFP4.gguf`, 63,4 GB, 116,8 Mrd. Parameter, 128 Experten, 4 aktiv |
-| llama.cpp | Fork `Nathanw1014/llama.cpp` @ `50c271f8e` (Upstream-Basis 2026-08-17), aus dem Quelltext gebaut; für HIP Upstream `a894dae` |
-| ROCm | 7.1.1 (Fedora-Pakete); zusätzlich Laufzeit 7.2.1 aus dem Ollama-Bündel |
-| Leistungsmodus | vermutlich „Balanced" 85 W — nicht gesondert geprüft |
+| Machine | AMD Ryzen AI MAX+ 395, Radeon 8060S (gfx1151), 128 GB LPDDR5X-8000 unified |
+| System | Nobara 44, kernel 7.2.6, Mesa RADV (system), GTT limit 120 GiB |
+| Model | `ggml-org/gpt-oss-120b-GGUF`, `gpt-oss-120b-MXFP4.gguf`, 63.4 GB, 116.8 B parameters, 128 experts, 4 active |
+| llama.cpp | fork `Nathanw1014/llama.cpp` @ `50c271f8e` (upstream base 2026-08-17), built from source; upstream `a894dae` for HIP |
+| ROCm | 7.1.1 (Fedora packages); additionally the 7.2.1 runtime from the Ollama bundle |
+| Power mode | presumably "Balanced" 85 W — not checked separately |
 
-Alle Werte aus `llama-bench` (`-r 2`), sofern nicht anders angegeben. Bezugspunkt ist Vulkan
-mit `-fa 1 -b 2048 -ub 512`: **834,9 Token/s Prompt-Verarbeitung (pp512), 53,5 Token/s
-Textausgabe (tg128)**. Ladezeit aus dem Seitencache 5 s; ein echter Kaltstart von der Platte
-wurde nicht gemessen.
+All values come from `llama-bench` (`-r 2`) unless stated otherwise. The baseline is Vulkan
+with `-fa 1 -b 2048 -ub 512`: **834.9 tok/s prompt processing (pp512), 53.5 tok/s text
+generation (tg128)**. Load time from the page cache was 5 s; a true cold start from disk was
+not measured.
 
-## Ergebnis in einem Satz
+## The result in one sentence
 
-Der größte Hebel ist der Mikrobatch (`-ub 2048`: +33,5 % Prompt-Verarbeitung), die
-Textausgabe liegt bei 85 % der Speicherbandbreite und ist mit Einstellungen nicht mehr
-nennenswert zu steigern, und das mitgelieferte EAGLE3-Entwurfsmodell macht es langsamer.
+The biggest lever is the micro-batch (`-ub 2048`: +33.5 % prompt processing), text generation
+sits at 85 % of the memory-bandwidth ceiling and cannot be raised meaningfully by settings,
+and the EAGLE3 draft model shipped with the model makes it slower.
 
-## Was wirkt
+## What helps
 
-| Hebel | Prompt-Verarbeitung | Textausgabe |
+| Lever | Prompt processing | Text generation |
 |---|---|---|
-| **Mikrobatch `-ub 2048` statt 512** (pp2048) | **+33,5 %** (838,2 → 1119,4 Token/s) | unberührt |
-| Mikrobatch 1024 statt 512 | +17,8 % (987,6 Token/s) | unberührt |
-| Mikrobatch 256 statt 512 | −21,2 % (660,3 Token/s) | unberührt |
-| Flash Attention an statt aus | +14,4 % (729,5 → 834,9 Token/s) | +1,9 % |
-| Fork-Schalter `GGML_VK_MMID_SMALLN` aus | −12,4 % | 0 |
-| Fork-Schalter `GGML_VK_MMID_ROWLISTS` aus | −6,5 % | 0 |
-| Fork-Schalter `GGML_VK_MMID_BM64` aus | −4,6 % | 0 |
+| **Micro-batch `-ub 2048` instead of 512** (pp2048) | **+33.5 %** (838.2 → 1119.4 tok/s) | unaffected |
+| Micro-batch 1024 instead of 512 | +17.8 % (987.6 tok/s) | unaffected |
+| Micro-batch 256 instead of 512 | −21.2 % (660.3 tok/s) | unaffected |
+| Flash attention on instead of off | +14.4 % (729.5 → 834.9 tok/s) | +1.9 % |
+| Fork switch `GGML_VK_MMID_SMALLN` off | −12.4 % | 0 |
+| Fork switch `GGML_VK_MMID_ROWLISTS` off | −6.5 % | 0 |
+| Fork switch `GGML_VK_MMID_BM64` off | −4.6 % | 0 |
 
-## Was nichts bringt
+## What does nothing
 
-| Hebel | Prompt-Verarbeitung | Textausgabe |
+| Lever | Prompt processing | Text generation |
 |---|---|---|
-| Batch `-b 2048` statt 512 bei festem Mikrobatch | −0,7 % (Rauschen) | — |
-| KV-Cache q8_0 statt f16, bei 8192 Token Tiefe | −2,4 % | +2,1 % |
-| Fork-Payload mit gebündeltem RADV statt Quelltext-Bau mit System-RADV | −4,2 % | +2,3 % |
-| ROCm-Laufzeit 7.2.1 statt 7.1.1 (HIP) | ±0,5 % | ±1 % |
+| Batch `-b 2048` instead of 512 at a fixed micro-batch | −0.7 % (noise) | — |
+| KV cache q8_0 instead of f16, at depth 8192 | −2.4 % | +2.1 % |
+| Fork payload with bundled RADV instead of source build with system RADV | −4.2 % | +2.3 % |
+| ROCm runtime 7.2.1 instead of 7.1.1 (HIP) | ±0.5 % | ±1 % |
 
-Es zählt also der **Mikro**batch, nicht der Batch. Zur ROCm-Zeile gehört eine Einschränkung:
-Getauscht wurden per `LD_PRELOAD` nur `libamdhip64`, `libhsa-runtime64` und `libamd_comgr`;
-rocBLAS blieb 7.1.1, weil das Bündel keine gfx1151-Kernel mitbringt. Ein vollständig
-installiertes ROCm 7.2 ist damit nicht gemessen.
+So it is the **micro**-batch that counts, not the batch. The ROCm line needs a caveat: only
+`libamdhip64`, `libhsa-runtime64` and `libamd_comgr` were swapped via `LD_PRELOAD`; rocBLAS
+stayed at 7.1.1 because the bundle ships no gfx1151 kernels. A fully installed ROCm 7.2 has
+therefore not been measured.
 
-## HIP gegen Vulkan: geteilt
+## HIP vs. Vulkan: a split decision
 
-| | Vulkan (Fork) | HIP (Upstream, ROCm 7.1.1) | |
+| | Vulkan (fork) | HIP (upstream, ROCm 7.1.1) | |
 |---|---|---|---|
-| pp512, `-ub 512` | 834,9 Token/s | **939,7 Token/s** | HIP +12,5 % |
-| pp2048, `-ub 2048` | 1119,4 Token/s | **1230,2 Token/s** | HIP +9,9 % |
-| tg128 | **53,5 Token/s** | 47,6 Token/s | Vulkan +12,4 % |
+| pp512, `-ub 512` | 834.9 tok/s | **939.7 tok/s** | HIP +12.5 % |
+| pp2048, `-ub 2048` | 1119.4 tok/s | **1230.2 tok/s** | HIP +9.9 % |
+| tg128 | **53.5 tok/s** | 47.6 tok/s | Vulkan +12.4 % |
 
-HIP gewinnt die Prompt-Verarbeitung, Vulkan die Textausgabe. Das ist das Muster, das auch
-andere Strix-Halo-Messungen zeigen — und das Gegenteil dessen, was dieses Repo für
-DeepSeek-V4 misst, wo Vulkan beides gewinnt ([HIP-BEFUND.md](HIP-BEFUND.md)). Für den Chat
-bleibt Vulkan die richtige Wahl; für reine Langprompt-Lasten ist HIP eine Option.
+HIP wins prompt processing, Vulkan wins text generation. That is the pattern other Strix Halo
+measurements show as well — and the opposite of what this repository measures for
+DeepSeek-V4, where Vulkan wins both ([HIP-BEFUND.md](HIP-BEFUND.md), German). For chat, Vulkan
+remains the right choice; for pure long-prompt workloads HIP is an option.
 
-## Spekulatives Dekodieren: EAGLE3 kostet Tempo
+## Speculative decoding: EAGLE3 costs speed
 
-Das Repository des Modells liefert ein EAGLE3-Entwurfsmodell mit (0,8 GB als Q8_0).
-Gemessen im Serverbetrieb (`--spec-type draft-eagle3`), drei feste Prompts mit rund 2000
-Token Vorlauf und 256 Token Ausgabe, Median:
+The model repository ships an EAGLE3 draft model (0.8 GB as Q8_0). Measured in server mode
+(`--spec-type draft-eagle3`), three fixed prompts with about 2000 tokens of context and 256
+tokens of output, median:
 
-| Entwurfslänge | Textausgabe | Annahmequote | mittlere angenommene Länge |
+| Draft length | Text generation | Acceptance rate | Mean accepted length |
 |---|---|---|---|
-| ohne | **51,7 Token/s** | — | — |
-| 1 | 43,7 Token/s (−15,5 %) | 0,48 | 1,48 |
-| 2 | 38,9 Token/s (−24,7 %) | 0,31 | 1,62 |
-| 3 | 32,4 Token/s (−37,3 %) | 0,22 | 1,66 |
-| 4 | 27,7 Token/s (−46,4 %) | 0,17 | 1,66 |
+| none | **51.7 tok/s** | — | — |
+| 1 | 43.7 tok/s (−15.5 %) | 0.48 | 1.48 |
+| 2 | 38.9 tok/s (−24.7 %) | 0.31 | 1.62 |
+| 3 | 32.4 tok/s (−37.3 %) | 0.22 | 1.66 |
+| 4 | 27.7 tok/s (−46.4 %) | 0.17 | 1.66 |
 
-Dazu sinkt die Prompt-Verarbeitung mit geladenem Entwurfsmodell um rund 9 %.
+In addition, prompt processing drops by about 9 % with the draft model loaded.
 
-**Einschränkung:** Gemessen wurde mit deutschem Text über `/completion` ohne Chat-Vorlage.
-gpt-oss ist auf sein Harmony-Format trainiert; im echten Chatbetrieb und mit englischem Text
-kann die Annahmequote höher liegen. Belegt ist der Verlust nur für diesen Messfall. Dass bei
-einem MoE-Modell jede zusätzlich geprüfte Position weitere Experten aktiviert und damit den
-Gewinn auffrisst, ist als Erklärung plausibel, hier aber nicht isoliert gemessen.
+**Caveat:** this was measured with German text through `/completion`, without the chat
+template. gpt-oss is trained on its Harmony format; in real chat use and with English text the
+acceptance rate may be higher. The loss is established for this test case only. That every
+additionally verified position activates further experts in a MoE model and thereby eats the
+gain is a plausible explanation, but it was not isolated here.
 
-## Kontexttiefe
+## Context depth
 
-| Tiefe | Prompt-Verarbeitung | Textausgabe |
+| Depth | Prompt processing | Text generation |
 |---|---|---|
-| 0 | 834,2 Token/s | 53,6 Token/s |
-| 8192 | 747,7 Token/s (−10,4 %) | 49,1 Token/s (−8,5 %) |
-| ~87 000 (eine echte Anfrage über den Server) | 622 Token/s | 29,1 Token/s |
+| 0 | 834.2 tok/s | 53.6 tok/s |
+| 8192 | 747.7 tok/s (−10.4 %) | 49.1 tok/s (−8.5 %) |
+| ~87,000 (one real request through the server) | 622 tok/s | 29.1 tok/s |
 
-Die letzte Zeile stammt aus dem laufenden Dienst: 87 045 Token Vorlauf in 140 s.
+The last row comes from the running service: 87,045 prompt tokens in 140 s.
 
-## Warum die Textausgabe am Anschlag ist
+## Why text generation is at its limit
 
-Aus dem Kopf der GGUF-Datei (Größe je Tensor aus den Datenoffsets):
+From the GGUF header (size per tensor derived from the data offsets):
 
-| Anteil | gesamt | je Token gelesen |
+| Part | Total | Read per token |
 |---|---|---|
-| Experten (MXFP4), 4 von 128 aktiv | 61,07 GB | 1,91 GB |
-| Attention-Matrizen | 1,02 GB | 1,02 GB |
-| Ausgabematrix | 0,62 GB | 0,62 GB |
-| Router und Rest | 0,05 GB | 0,05 GB |
-| **Summe** | | **3,59 GB** |
+| Experts (MXFP4), 4 of 128 active | 61.07 GB | 1.91 GB |
+| Attention matrices | 1.02 GB | 1.02 GB |
+| Output matrix | 0.62 GB | 0.62 GB |
+| Router and the rest | 0.05 GB | 0.05 GB |
+| **Sum** | | **3.59 GB** |
 
-Bei den auf dieser Maschine gemessenen 226 GB/s Speicherbandbreite ergibt das eine
-Obergrenze von **62,9 Token/s**. Die gemessenen 53,5 Token/s sind **85 %** davon. Mehr
-Textausgabe gibt es nur mit weniger Bytes je Token — und die Experten lassen sich mit den
-üblichen GGUF-Formaten nicht kleiner machen: Alle verbreiteten Quantisierungen dieses Modells
-sind praktisch gleich groß, weil die Experten MXFP4 bleiben.
+At the 226 GB/s memory bandwidth measured on this machine, that gives a ceiling of
+**62.9 tok/s**. The measured 53.5 tok/s is **85 %** of it. More generation speed requires
+fewer bytes per token — and the experts cannot be made smaller with the usual GGUF formats:
+all common quantizations of this model are practically the same size because the experts stay
+MXFP4.
 
-## Korrektheit
+## Correctness
 
-Der Parameterdurchlauf selbst lief **ohne** Korrektheitsprobe. Nachgeholt wurde sie für die
-Betriebseinstellung (`-ub 2048`, Flash Attention an), und zwar über zwei unabhängige
-Implementierungen:
+The parameter sweep itself ran **without** a correctness check. It was done afterwards for the
+production setting (`-ub 2048`, flash attention on), across two independent implementations:
 
-| Backend | Perplexität (wikitext, 10 Blöcke à 2048) |
+| Backend | Perplexity (wikitext, 10 chunks of 2048) |
 |---|---|
-| Vulkan, Fork `50c271f8e` (ggml 0.20.1) | 436,9 ± 13,9 |
-| HIP, Upstream `a894dae` (ggml 0.24.0) | 455,5 ± 14,4 |
+| Vulkan, fork `50c271f8e` (ggml 0.20.1) | 436.9 ± 13.9 |
+| HIP, upstream `a894dae` (ggml 0.24.0) | 455.5 ± 14.4 |
 
-Beide stimmen innerhalb einer Standardabweichung überein. Der absolut hohe Wert ist kein
-Rechenfehler, sondern eine Eigenschaft des Modells: gpt-oss ist stark auf sein Chatformat
-nachtrainiert und sagt rohen Wikipedia-Text schlecht vorher. **Wikitext-Perplexität taugt bei
-diesem Modell nur zum Vergleich zweier Backends, nicht als Gütemaß** — und bei einem
-Grundwert von rund 440 ist sie unempfindlich gegen kleine Fehler. Zusätzlich drei
-Wissensfragen über den echten Dienstweg, alle richtig. Die übrigen Zeilen der Tabellen oben
-(Fork-Schalter einzeln aus, KV q8_0, HIP mit getauschter Laufzeit) sind nicht einzeln auf
-Korrektheit geprüft; wie schnell das schiefgeht, zeigt der zurückgezogene Abschnitt im
-[README](README.md#2-zurueckgezogen-moe-kernel-verbessern-nur-den-prefill).
+Both agree within one standard deviation. The high absolute value is not a compute error but
+a property of the model: gpt-oss is heavily post-trained on its chat format and predicts raw
+Wikipedia text poorly. **For this model, wikitext perplexity is only useful for comparing two
+backends, not as a quality metric** — and at a base value of about 440 it is insensitive to
+small errors. In addition, three factual questions through the real service path were all
+answered correctly. The remaining table rows above (fork switches individually off, KV q8_0,
+HIP with a swapped runtime) were not individually checked for correctness; how quickly that
+goes wrong is shown by the retracted section in the
+[README](README.md#2-zurueckgezogen-moe-kernel-verbessern-nur-den-prefill) (German), where
+disabling an optimization produced a fast run that computed `nan`.
 
-## Einordnung gegen Fremdwerte
+## Comparison with third-party numbers
 
-Vergleichbar ist nur pp512 mit Standard-Mikrobatch: **834,9 Token/s** hier gegen die in
-[BENCHMARKS.md](BENCHMARKS.md) zitierte Fremdmessung mit 719,9 Token/s (Textausgabe dort
-56,6 gegen 53,5 Token/s hier). Die 1119 bzw. 1230 Token/s gelten für 2048 Token Vorlauf mit
-`-ub 2048` und sind mit pp512-Werten anderer nicht vergleichbar — wer dieselbe Einstellung
-setzt, dürfte ähnlich zulegen.
+Only pp512 with the default micro-batch is comparable: **834.9 tok/s** here versus the
+third-party measurement cited in [BENCHMARKS.md](BENCHMARKS.md) at 719.9 tok/s (generation
+there 56.6 versus 53.5 tok/s here). The 1119 and 1230 tok/s figures apply to a 2048-token
+prompt with `-ub 2048` and must not be compared with other people's pp512 numbers — anyone
+using the same setting should see a similar gain.
 
-## Empfohlene Einstellung
+## Recommended setting
 
 ```bash
 llama-server -m gpt-oss-120b-MXFP4.gguf -ngl 999 -fa on -ub 2048 --jinja \
   -c 131072 -np 2 --kv-unified --predict 16384
 ```
 
-* `-ub 2048` und `-fa on`: die beiden Hebel mit messbarer Wirkung.
-* KV-Cache in f16, **kein** Entwurfsmodell.
-* `--kv-unified`: ein gemeinsamer KV-Speicher für beide Slots — eine einzelne Anfrage darf
-  die vollen 131 072 Token nutzen. Mit starrer Aufteilung scheiterte eine Anfrage mit
-  86 820 Token an der Slot-Grenze von 32 768. Mehrkosten rund 2,5 GiB.
-* `--predict 16384`: ohne Obergrenze lief ein einzelner Durchgang über 20 000 Token und
-  hätte erst beim vollen Kontext aufgehört.
-* Speicher mit geladenem Modell: rund 67 GiB. Zusammen mit einem zweiten großen Modell ist
-  Vorsicht geboten — auf dieser APU bleibt der amdgpu-Treiber bei etwa 108 GB belegtem
-  Speicher mit ENOMEM hängen, und einen GPU-Reset gibt es nicht
-  ([README, Abschnitt 12](README.md#12-warnung-iq2-mit-entwurfsmodell-steht-an-der-speichergrenze)).
+* `-ub 2048` and `-fa on`: the two levers with a measurable effect.
+* KV cache in f16, **no** draft model.
+* `--kv-unified`: one shared KV buffer for both slots — a single request may use the full
+  131,072 tokens. With a fixed split, a request with 86,820 tokens failed at the per-slot
+  limit of 32,768. Extra cost about 2.5 GiB.
+* `--predict 16384`: without a cap, a single generation ran past 20,000 tokens and would only
+  have stopped at the full context.
+* Memory with the model loaded: about 67 GiB. Be careful when a second large model is
+  resident — on this APU the amdgpu driver hangs with ENOMEM at roughly 108 GB of used
+  memory, and there is no GPU reset
+  ([README, section 12](README.md#12-warnung-iq2-mit-entwurfsmodell-steht-an-der-speichergrenze), German).
 
-## Nicht gemessen
+## Not measured
 
-120-W-Leistungsmodus, `-ub 4096`, KV q8_0 bei sehr großer Tiefe (rechnerisch der einzige
-Einstellungshebel, der die Textausgabe bei langen Kontexten noch heben könnte),
-`reasoning_effort` (ändert nicht die Rate, aber die Zahl der Denk-Token und damit die
-Wartezeit), n-gram-Spekulation, sowie der offene Upstream-PR
-[#27952](https://github.com/ggml-org/llama.cpp/pull/27952) (int8-Matrixkerne für RDNA3, deckt
-laut Beschreibung MXFP4 ab).
+The 120 W power mode, `-ub 4096`, KV q8_0 at very large depth (by calculation the only
+settings lever that could still raise generation speed at long contexts), `reasoning_effort`
+(does not change the rate, but the number of reasoning tokens and thus the waiting time),
+n-gram speculation, and the open upstream PR
+[#27952](https://github.com/ggml-org/llama.cpp/pull/27952) (int8 matrix kernels for RDNA3,
+which according to its description covers MXFP4).

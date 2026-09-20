@@ -34,7 +34,7 @@ unten sind damit ueberholt)
 
 * **Nebenmessung gpt-oss-120b** auf derselben Maschine (20.09.2026): `-ub 2048` bringt +33,5 %
   Prompt-Verarbeitung, die Textausgabe liegt bei 85 % der Speicherbandbreite, EAGLE3 kostet
-  15 bis 46 % — siehe [GPT-OSS-120B.md](GPT-OSS-120B.md).
+  15 bis 46 % — siehe [GPT-OSS-120B.md](GPT-OSS-120B.md) (auf Englisch).
 
 ## Hardware / Software
 
