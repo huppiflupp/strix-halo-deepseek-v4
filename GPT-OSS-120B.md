@@ -180,11 +180,13 @@ elsewhere in this repository (50c271f8e).
 | fork | 847.2 tok/s | 1130.3 tok/s | 53.60 tok/s |
 | **master + PR #27952** | **1151.9 tok/s (+47 %)** | **1463.9 tok/s (+32 %)** | 53.70 tok/s |
 
-Perplexity of the PR build: 454.04 ± 14.39, inside the band of the other builds
-(436.9 to 455.5) — it computes correctly. Generation is unchanged, as expected for a
+Perplexity of the PR build: 454.04 ± 14.39, against 456.47 ± 14.50 for master built the same
+day (fork: 436.9) — it computes correctly. Generation is unchanged, as expected for a
 bandwidth-bound phase.
 
 ### The picture flips on long prompts
+
+![Levers compared: prompt processing, generation at depth, perplexity](bilder/gptoss-hebel.png)
 
 | Build and setting | Prompt, 2048 tokens | Prompt, 16384 tokens | Generation at depth 32768 | Perplexity (10 chunks, lower is better) |
 |---|---|---|---|---|
