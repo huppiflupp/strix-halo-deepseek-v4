@@ -326,6 +326,74 @@ und das Ergebnis fuellt ein eigenes Dokument:
 
 Einzelheiten, Eingrenzung und Rohdaten: **[HIP-BEFUND.md](HIP-BEFUND.md)**.
 
+### 9. Braucht man den Fork noch? Upstream gegen Fork, gemessen
+
+Der Fork (`Nathanw1014/llama.cpp`, Commit `50c271f8e`) hat seine Upstream-Basis am
+**2026-08-17** und liegt inzwischen **600 Commits zurueck**. Der Grund fuer seinen Einsatz
+war der August-Befund weiter oben (+62 % Prompt-Verarbeitung, +53 % Textausgabe gegen
+Mainline b10488). Beide Baeume heute aus dem Quelltext gebaut, Vulkan, System-RADV,
+gleiche Flags, `LLAMA_MOE_F16=0` auf beiden Seiten:
+
+**DeepSeek-V4-Flash UD-IQ3_XXS (97 GiB)**
+
+| Messgroesse | Fork | Upstream `a894dae` | Unterschied |
+|---|---|---|---|
+| Prompt-Verarbeitung, leerer Kontext (Token/s) | 233,74 ± 0,49 | 206,87 ± 0,43 | +13 % Fork |
+| **Prompt-Verarbeitung bei 8192 Token Vorlauf (Token/s)** | **209,64 ± 0,11** | **140,77 ± 0,50** | **+49 % Fork** |
+| Textausgabe, leerer Kontext (Token/s) | 18,21 ± 0,00 | 18,58 ± 0,01 | +2 % Upstream |
+| Textausgabe bei 8192 Token Vorlauf (Token/s) | 17,60 ± 0,02 | 17,18 ± 0,01 | +2 % Fork |
+| Perplexitaet, 10 Bloecke (dimensionslos, kleiner = besser) | 4,0709 ± 0,0977 | 4,1050 ± 0,0989 | gleich |
+
+**Qwen3.6-35B-A3B UD-IQ4_XS (17 GiB), zum Vergleich ein Modell mit wenigen Experten**
+
+| Messgroesse | Fork | Upstream | Unterschied |
+|---|---|---|---|
+| Prompt-Verarbeitung, leerer Kontext (Token/s) | 1572,08 ± 13,30 | 1293,47 ± 0,35 | +22 % Fork |
+| Prompt-Verarbeitung bei 8192 Token Vorlauf (Token/s) | 1349,73 ± 13,24 | 1101,85 ± 0,43 | +23 % Fork |
+| Textausgabe, leerer Kontext (Token/s) | 62,28 ± 0,00 | 63,09 ± 0,06 | +1 % Upstream |
+| Textausgabe bei 8192 Token Vorlauf (Token/s) | 58,32 ± 0,02 | 58,72 ± 0,02 | +1 % Upstream |
+| Perplexitaet, 10 Bloecke | 5,7170 ± 0,1397 | 5,7159 ± 0,1396 | gleich |
+
+Das Bild hat sich seit August **verschoben**:
+
+* **Bei der Textausgabe hat Upstream aufgeschlossen.** Der August-Vorsprung des Forks
+  (+53 %) ist weg; heute liegen beide innerhalb von 2 % beieinander, mal so, mal so.
+* **Beim Prompt-Vorlauf bleibt der Fork vorn, und der Abstand waechst mit der Kontexttiefe.**
+  Upstream verliert von leerem Kontext auf 8192 Token 32 % (206,9 -> 140,8 Token/s), der
+  Fork nur 10 % (233,7 -> 209,6). Das passt zu seinen Flash-Attention-Aenderungen
+  (KV einmal dequantisieren, strided f16-KV kontiguieren, 32er-Subgruppen festpinnen).
+* **Beide rechnen korrekt** -- die Perplexitaeten sind auf beiden Modellen deckungsgleich.
+* Die Spekulationstypen, die unsere Dienste brauchen (`draft-mtp`, `draft-dspark`), kennt
+  **Upstream inzwischen ebenfalls**. Dafuer wird der Fork nicht mehr gebraucht.
+
+Fuer den Alltag heisst das: Der Fork lohnt sich weiterhin, aber nur noch wegen des
+Prompt-Vorlaufs bei gefuelltem Kontext -- also genau fuer Agenten- und Langkontextbetrieb.
+Wer kurze Chats fuehrt, verliert mit Upstream nichts und gewinnt 600 Commits an Fehlerfixes.
+
+### 10. Der HIP-Fehler ist ein bekannter Upstream-Fehler, im Fork noch enthalten
+
+Das modellabhaengige Falschrechnen aus [HIP-BEFUND.md](HIP-BEFUND.md) ist vollstaendig
+aufgeklaert: Es ist
+[Issue #28211](https://github.com/ggml-org/llama.cpp/issues/28211) ("wrong logits, triggered
+by prompts longer than n_ubatch"), und es trifft nur Prompts, die groesser als die
+Mikrobatchgroesse sind.
+
+| Qwen3-1.7B Q8_0, HIP, 5 Bloecke | Perplexitaet (kleiner = besser) |
+|---|---|
+| Fork, `-ub 512` (Vorgabe) | 112 536 |
+| Fork, `-ub 2048` | **16,486** |
+| Upstream `a894dae`, `-ub 512` | **16,511** |
+
+Perplexitaetslaeufe mit `-c 2048` gegen die Vorgabe `-ub 512` ueberschreiten die Grenze in
+jedem Block -- deshalb der Ausschlag. Mit `-ub 2048` rechnet auch der Fork richtig, und auf
+aktuellem Upstream tritt der Fehler gar nicht mehr auf. Der Fork sitzt auf dem Stand vom
+17.08. und damit vor dem Fix.
+
+Ebenfalls gemessen und ohne Wirkung: `ROCBLAS_USE_HIPBLASLT=1`, in der Literatur der
+groesste Prompt-Vorlauf-Hebel fuer gfx1151 (5472,89 ± 135,48 gegen 5533,75 ± 208,06 Token/s
+auf Qwen3-1.7B). Die nativen gfx1151-Kernel dafuer kamen erst mit ROCm 7.2; wir laufen auf
+7.1.1.
+
 ### Messvorschrift
 
 Die Skripte liegen nicht in diesem Repo, sondern entstanden ad hoc; die Kernbefehle:
