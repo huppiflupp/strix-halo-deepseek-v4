@@ -147,11 +147,12 @@ using the same setting should see a similar gain.
 ## Recommended setting
 
 ```bash
-llama-server -m gpt-oss-120b-MXFP4.gguf -ngl 999 -fa on -ub 2048 --jinja \
+llama-server -m gpt-oss-120b-MXFP4.gguf -ngl 999 -fa on -ub 4096 -b 4096 --jinja \
   -c 131072 -np 2 --kv-unified --predict 16384
 ```
 
-* `-ub 2048` and `-fa on`: the two levers with a measurable effect.
+* `-ub 4096 -b 4096` and `-fa on`: the two levers with a measurable effect (`-ub 4096` adds
+  another 10–11 % over `-ub 2048` on prompts of 4096 tokens and more, see the follow-up below).
 * KV cache in f16, **no** draft model.
 * `--kv-unified`: one shared KV buffer for both slots — a single request may use the full
   131,072 tokens. With a fixed split, a request with 86,820 tokens failed at the per-slot
@@ -163,11 +164,77 @@ llama-server -m gpt-oss-120b-MXFP4.gguf -ngl 999 -fa on -ub 2048 --jinja \
   memory, and there is no GPU reset
   ([README, section 12](README.md#12-warnung-iq2-mit-entwurfsmodell-steht-an-der-speichergrenze), German).
 
+## Follow-up, 2026-09-21: the remaining levers, singly and combined
+
+Raw data and scripts in [messungen/2026-09-21/](messungen/2026-09-21/). Everything Vulkan
+(RADV), 85 W power mode, MXFP4 model file, flash attention on. Three builds made on the same
+day: llama.cpp master (ec9281505), master plus PR
+[#27952](https://github.com/ggml-org/llama.cpp/pull/27952) (df9bcc16a), and the fork used
+elsewhere in this repository (50c271f8e).
+
+### PR #27952 (int8 cooperative-matrix kernels for RDNA3)
+
+| Build | Prompt, 512 tokens | Prompt, 2048 tokens (`-ub 2048`) | Generation, 128 tokens |
+|---|---|---|---|
+| master | 783.2 tok/s | 1112.2 tok/s | 53.66 tok/s |
+| fork | 847.2 tok/s | 1130.3 tok/s | 53.60 tok/s |
+| **master + PR #27952** | **1151.9 tok/s (+47 %)** | **1463.9 tok/s (+32 %)** | 53.70 tok/s |
+
+Perplexity of the PR build: 454.04 ± 14.39, inside the band of the other builds
+(436.9 to 455.5) — it computes correctly. Generation is unchanged, as expected for a
+bandwidth-bound phase.
+
+### The picture flips on long prompts
+
+| Build and setting | Prompt, 2048 tokens | Prompt, 16384 tokens | Generation at depth 32768 | Perplexity (10 chunks, lower is better) |
+|---|---|---|---|---|
+| fork, `-ub 2048`, KV f16 | 1130 tok/s | 988 tok/s | 40.6 tok/s | 436.9 ± 13.9 |
+| **fork, `-ub 4096`, KV f16 (now in service)** | 1118 tok/s ¹ | **1097 tok/s** | 40.6 tok/s | 436.9 ± 13.9 |
+| fork, `-ub 4096`, KV q8_0 | 1109 tok/s | 1086 tok/s | 43.8 tok/s | 459.9 ± 14.6 |
+| PR #27952, `-ub 2048`, KV f16 | 1479 tok/s | 910 tok/s | – | 454.0 ± 14.4 |
+| PR #27952, `-ub 4096`, KV f16 | 1429 tok/s | 927 tok/s | 40.7 tok/s | 454.0 ± 14.4 |
+| PR #27952, `-ub 4096`, KV q8_0 | 1397 tok/s | **1159 tok/s** | 43.6 tok/s | 474.7 ± 15.1 |
+
+¹ measured with a 4096-token prompt.
+
+* The PR wins clearly on short prompts (+31 % at 2048 tokens) but **loses to the fork at
+  16384 tokens (−17 %)** as long as the KV cache is f16. The matrix kernels are faster, but
+  at that length attention over the filled cache dominates, and there the fork is ahead.
+* With a q8_0 KV cache the PR build gains 25 % at 16384 tokens (927 → 1159 tok/s) while the
+  fork does not move (1097 → 1086 tok/s). We have not investigated why.
+* `-ub 4096` helps the fork (+10 to +11 %) and does almost nothing on the PR build.
+
+### KV cache q8_0: faster at depth, but not free
+
+| Context depth | Generation, KV f16 | Generation, KV q8_0 | Gain |
+|---|---|---|---|
+| 8192 tokens | 49.05 tok/s | 50.08 tok/s | +2.1 % |
+| 32768 tokens | 40.58 tok/s | 43.75 tok/s | +7.8 % |
+| 65536 tokens | 33.08 tok/s | 38.05 tok/s | +15.0 % |
+
+Perplexity rises by about 5 % on both builds (436.9 → 459.9 and 454.0 → 474.7). Each
+difference alone is inside the error bar, but the same direction and size on two independent
+builds is why we count it as a real quality cost and keep f16. Caveat: wikitext perplexity of
+a chat-tuned reasoning model is high and noisy to begin with (10 chunks of 2048 tokens).
+
+### `reasoning_effort`
+
+Six short factual and arithmetic questions against the running server. Too few for a quality
+statement; the point is the waiting time.
+
+| Setting | Correct | Tokens generated (total) | Time per question |
+|---|---|---|---|
+| low | 5 of 6 | 279 | 1.2 s |
+| medium | 6 of 6 | 1719 | 5.8 s |
+| high | 6 of 6 | 3133 | 10.3 s |
+
+### What we took from it
+
+Fork with `-ub 4096 -b 4096`, KV f16, `reasoning_effort` medium: +11 % on long prompts at no
+quality cost. The fastest combination overall (PR #27952 + KV q8_0) would add +6 % on long
+and +25 % on short prompts, at roughly 9 % higher perplexity and on an unmerged PR — not
+taken for a service where correct beats fast.
+
 ## Not measured
 
-The 120 W power mode, `-ub 4096`, KV q8_0 at very large depth (by calculation the only
-settings lever that could still raise generation speed at long contexts), `reasoning_effort`
-(does not change the rate, but the number of reasoning tokens and thus the waiting time),
-n-gram speculation, and the open upstream PR
-[#27952](https://github.com/ggml-org/llama.cpp/pull/27952) (int8 matrix kernels for RDNA3,
-which according to its description covers MXFP4).
+The 120 W power mode, `amd_iommu=off`, and n-gram speculation.
