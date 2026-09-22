@@ -1,0 +1,15 @@
+Final estimate: PPL = 5.3577 +/- 0.14355
+== KLD, BCOL on vs off
+   chunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p
+   Mean PPL(Q)                   :   5.357746 ±   0.143547
+   Mean    KLD:  -0.000010 ±   0.000000
+   Maximum KLD:   0.000004
+   Same top p: 100.000 ± 0.000 %
+== speed X=1
+             pp512 |        450.96 ± 1.06  tok/s
+            pp2048 |        440.65 ± 0.25  tok/s
+== speed GGML_VK_LAB_MM_BCOL=1
+             pp512 |        467.41 ± 2.28  tok/s
+            pp2048 |        455.46 ± 0.17  tok/s
+BO_VA lines: 0
+done

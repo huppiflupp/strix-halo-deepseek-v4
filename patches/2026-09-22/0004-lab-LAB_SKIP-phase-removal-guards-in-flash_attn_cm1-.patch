@@ -1,0 +1,83 @@
+From 1576e7122582f96f30e7462170df02dda0e32bff Mon Sep 17 00:00:00 2001
+From: huppiflupp <144213886+huppiflupp@users.noreply.github.com>
+Date: Tue, 22 Sep 2026 08:04:48 +0200
+Subject: [PATCH 4/5] lab: LAB_SKIP phase-removal guards in flash_attn_cm1
+ (compile-time, default 0 = no change), kernel-lab E047
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ .../vulkan-shaders/flash_attn_cm1.comp        | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_cm1.comp b/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_cm1.comp
+index eabd18d92..2a98f4d97 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_cm1.comp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_cm1.comp
+@@ -1,5 +1,12 @@
+ #version 450
+ 
++#ifndef LAB_SKIP
++#define LAB_SKIP 0   // lab timing experiment (results wrong when != 0): 1 no K*Q, 2 no P*V, 4 no exp, 8 no mask add, 16 no barriers, 32 no O update
++#endif
++#if (LAB_SKIP & 16)
++#define barrier()
++#endif
++
+ #extension GL_EXT_control_flow_attributes : enable
+ #extension GL_EXT_shader_16bit_storage : require
+ 
+@@ -331,7 +338,9 @@ void main() {
+ 
+             coopMatLoad(QMat, Qf, d * 16 / 4, qstride, gl_CooperativeMatrixLayoutColumnMajor);
+ 
++#if !(LAB_SKIP & 1)
+             SfMat = coopMatMulAdd(KMat, QMat, SfMat);
++#endif
+         }
+ 
+         uint coord = gl_SubgroupID * MatBc * sfshstride;
+@@ -358,7 +367,9 @@ void main() {
+                         // Mask nem1 bounds check is handled when loading masks
+                         ACC_TYPEV4 masks = ACC_TYPEV4(mask_cache[idx / WorkGroupSize]);
+                         ACC_TYPEV4 slopes = ACC_TYPEV4(slope[r * 4], slope[r * 4 + 1], slope[r * 4 + 2], slope[r * 4 + 3]);
++#if !(LAB_SKIP & 8)
+                         sfsh[c * sfshstride + r] += slopes * masks;
++#endif
+                     }
+                 }
+             }
+@@ -409,7 +420,11 @@ void main() {
+                     Psh[col * psh_stride + row / 4] = FLOAT_TYPEV4(0.0f);
+                 } else {
+                     const vec4 mfvec = vec4(Mf[r], Mf[r + 1], Mf[r + 2], Mf[r + 3]);
++#if (LAB_SKIP & 4)
++                    const FLOAT_TYPEV4 Pf = FLOAT_TYPEV4(vec4(sfsh[row / 4 + col * sfshstride]) - mfvec);
++#else
+                     const FLOAT_TYPEV4 Pf = FLOAT_TYPEV4(exp(vec4(sfsh[row / 4 + col * sfshstride]) - mfvec));
++#endif
+                     [[unroll]] for (uint32_t vec_idx = 0; vec_idx < 4; ++vec_idx) {
+                         Lf[r + vec_idx] += Pf[vec_idx];
+                     }
+@@ -528,7 +543,9 @@ void main() {
+                         coopMatLoad(QMat, kvsh, v_tile_offset, kvsh_stride, gl_CooperativeMatrixLayoutRowMajor);
+                     }
+ 
++#if !(LAB_SKIP & 2)
+                     PVMat = coopMatMulAdd(KMat, QMat, PVMat);
++#endif
+                 }
+ 
+                 // Store PVMat to pvsh and load into Of
+@@ -553,7 +570,9 @@ void main() {
+ 
+                     if (hsv_col >= hsv_base && hsv_col < hsv_base + hsv_per_tile && hsv_col < HSV) {
+                         const uint local_hsv = (hsv_col - hsv_base) / 4;
++#if !(LAB_SKIP & 32)
+                         Of[r][d_local] += pvsh[row * osh_stride + local_hsv];
++#endif
+                     }
+                 }
+             }
+-- 
+2.55.0
+

@@ -1,0 +1,21 @@
+##### fork
+TEXT:
+  answer: 
+  thinking chars: 1384 | prompt 217 tok/s, generation 99.3 tok/s, draft accepted 279 of 357
+IMAGE:
+  answer: Im Bild sind folgende Elemente zu sehen:  **Formen und Farben:** *   Ein **roter Kreis** auf der linken Seite. *   Ein **blaues Quadrat** auf der rechten Seite.  **Text:** *   Darunter, in der Mitte, steht der kleine Text: **AI395**
+  thinking chars: 1075 | prompt 449 tok/s, generation 96.2 tok/s, draft accepted 271 of 357
+ok 48
+  GTT with model loaded: 27 GiB
+##### new
+TEXT:
+  answer: 
+  thinking chars: 1309 | prompt 128 tok/s, generation 96.7 tok/s, draft accepted 276 of 368
+IMAGE:
+  answer: Im Bild sind folgende Elemente zu sehen:  **Formen und
+  thinking chars: 1290 | prompt 467 tok/s, generation 98.8 tok/s, draft accepted 278 of 362
+ok 48
+  GTT with model loaded: 26 GiB
+##### probes: new build NaN 0/48 · same top token as the fork 46/48 · mean KLD over shared top-20 0.00830 · max 0.0633
+BO_VA lines: 0
+done

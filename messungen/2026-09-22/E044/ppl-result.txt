@@ -1,0 +1,16 @@
+== ROCm reference
+Final estimate: PPL = 6.2923 +/- 0.11051
+== new build, X=1, vs ROCm
+   chunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p
+   Mean PPL(Q)                   :   6.279097 ±   0.110300
+   Mean    KLD:   0.009709 ±   0.000613
+   Maximum KLD:   6.535068
+   Same top p: 95.982 ± 0.137 %
+== new build, GGML_VK_LAB_CONCAT_T=1, vs ROCm
+   chunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p
+   Mean PPL(Q)                   :   6.279097 ±   0.110300
+   Mean    KLD:   0.009709 ±   0.000613
+   Maximum KLD:   6.535068
+   Same top p: 95.982 ± 0.137 %
+BO_VA lines: 0
+done

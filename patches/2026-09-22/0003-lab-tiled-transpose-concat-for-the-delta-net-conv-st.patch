@@ -1,0 +1,398 @@
+From 3f39e2e393269ec8b5a1bd7b266fcb9ac0ec8bf0 Mon Sep 17 00:00:00 2001
+From: huppiflupp <144213886+huppiflupp@users.noreply.github.com>
+Date: Mon, 21 Sep 2026 23:44:14 +0200
+Subject: [PATCH 3/5] lab: tiled transpose-concat for the delta-net conv state
+ (GGML_VK_LAB_CONCAT_T, ported from the strix-llama fork, kernel-lab E040); FA
+ KT / KV-tiles experiments (default off)
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ ggml/src/ggml-vulkan/ggml-vulkan-types.h      |  3 +-
+ ggml/src/ggml-vulkan/ggml-vulkan.cpp          | 69 +++++++++++++++++--
+ .../vulkan-shaders/concat_transpose.comp      | 43 ++++++++++++
+ .../vulkan-shaders/flash_attn_base.glsl       |  3 +
+ .../vulkan-shaders/flash_attn_cm1.comp        | 19 ++++-
+ .../vulkan-shaders/lab_fa_kvpack.comp         | 30 ++++++++
+ .../vulkan-shaders/vulkan-shaders-gen.cpp     |  2 +
+ tests/test-backend-ops.cpp                    | 52 ++++++++++++++
+ 8 files changed, 212 insertions(+), 9 deletions(-)
+ create mode 100644 ggml/src/ggml-vulkan/vulkan-shaders/concat_transpose.comp
+ create mode 100644 ggml/src/ggml-vulkan/vulkan-shaders/lab_fa_kvpack.comp
+
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan-types.h b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
+index 9aeec9671..16b457f9e 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan-types.h
++++ b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
+@@ -830,9 +830,10 @@ struct vk_device_struct {
+     vk_pipeline pipeline_multi_add_rms[MAX_FUSED_ADDS];
+ 
+     vk_pipeline pipeline_add_id_f32;
++    vk_pipeline pipeline_lab_fa_kvpack;   // lab: tile-packed K/V scratch for prompt-phase attention
+     vk_pipeline pipeline_lab_mm_pack_f16, pipeline_lab_mm_pack_f32, pipeline_lab_mm_unpad_f32, pipeline_lab_mm_gemm;   // lab: packed dense matmul
+ 
+-    vk_pipeline pipeline_concat_i8, pipeline_concat_i16, pipeline_concat_i32, pipeline_concat_i64;
++    vk_pipeline pipeline_concat_i8, pipeline_concat_i16, pipeline_concat_i32, pipeline_concat_i64, pipeline_concat_transpose_i32;
+     vk_pipeline pipeline_upscale_nearest_f32, pipeline_upscale_bilinear_f32, pipeline_upscale_bicubic_f32, pipeline_upscale_bilinear_antialias_f32;
+     vk_pipeline pipeline_scale_f32;
+     vk_pipeline pipeline_log[2];
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index 126b23b4f..ef7d7ad5f 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -3313,6 +3313,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
+ #if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+     if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture == AMD_RDNA3 && device->coopmat_support && !device->coopmat2 &&
+         device->subgroup_size == 64 && device->subgroup_require_full_support) {
++        ggml_vk_create_pipeline(device, device->pipeline_lab_fa_kvpack, "lab_fa_kvpack", lab_fa_kvpack_len, lab_fa_kvpack_data, "main", 2, 8 * sizeof(uint32_t), {256, 1, 1}, {}, 1);
+         ggml_vk_create_pipeline(device, device->pipeline_lab_mm_pack_f16, "lab_mm_pack_f16", lab_mm_pack_f16_len, lab_mm_pack_f16_data, "main", 2, 4 * sizeof(uint32_t), {256, 1, 1}, {0}, 1);
+         ggml_vk_create_pipeline(device, device->pipeline_lab_mm_pack_f32, "lab_mm_pack_f32", lab_mm_pack_f32_len, lab_mm_pack_f32_data, "main", 2, 4 * sizeof(uint32_t), {256, 1, 1}, {1}, 1);
+         ggml_vk_create_pipeline(device, device->pipeline_lab_mm_unpad_f32, "lab_mm_unpad_f32", lab_mm_unpad_f32_len, lab_mm_unpad_f32_data, "main", 2, 4 * sizeof(uint32_t), {256, 1, 1}, {2}, 1);
+@@ -3326,6 +3327,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
+     ggml_vk_create_pipeline(device, device->pipeline_concat_i8, "concat_i8", concat_i8_len, concat_i8_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
+     ggml_vk_create_pipeline(device, device->pipeline_concat_i16, "concat_i16", concat_i16_len, concat_i16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
+     ggml_vk_create_pipeline(device, device->pipeline_concat_i32, "concat_i32", concat_i32_len, concat_i32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
++    ggml_vk_create_pipeline(device, device->pipeline_concat_transpose_i32, "concat_transpose_i32", concat_transpose_i32_len, concat_transpose_i32_data, "main", 3, sizeof(vk_op_binary_push_constants), {32, 32, 1}, {}, 1);
+     ggml_vk_create_pipeline(device, device->pipeline_concat_i64, "concat_i64", concat_i64_len, concat_i64_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
+ 
+     ggml_vk_create_pipeline(device, device->pipeline_upscale_nearest_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_NEAREST}, 1);
+@@ -8254,11 +8256,26 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
+     // layout each lane's 16 kv values are one contiguous run (ColumnMajor load) instead of 16 separate loads.
+     // Row stride KV + 128 elements: 2*KV bytes is a multiple of 4 KB here, which would put all 16 hd rows of a tile
+     // on one memory channel (256 B interleave); +256 B shifts consecutive rows by one channel.
++    static const int lab_fa_tiles = [] { const char * e = getenv("GGML_VK_LAB_FA_TILES"); return e ? atoi(e) : 0; }();   // 1 K, 2 V, 3 both
++    const bool tiles_ok = lab_fa_tiles != 0 && use_dequant_kv && kv_f16_strided && tuning_params.path == FA_COOPMAT1 && aligned &&
++                          !tuning_params.shmem_staging && !use_sparse && nek3 == 1 && nev3 == 1 && (HSK % 16) == 0 && (HSV % 16) == 0 && (KV % 16) == 0 &&
++                          ctx->device->pipeline_lab_fa_kvpack != nullptr;
++    const bool use_ktile = tiles_ok && (lab_fa_tiles & 1), use_vtile = tiles_ok && (lab_fa_tiles & 2);
+     static const bool lab_fa_vt = getenv("GGML_VK_LAB_FA_VT") != nullptr;
+     const uint32_t KV_pad = (uint32_t)KV + 128;
+-    const bool use_vt = lab_fa_vt && use_dequant_kv && kv_f16_strided && tuning_params.path == FA_COOPMAT1 && aligned &&
++    const bool use_vt = !use_vtile && lab_fa_vt && use_dequant_kv && kv_f16_strided && tuning_params.path == FA_COOPMAT1 && aligned &&
+                         !tuning_params.shmem_staging && !use_sparse && nev3 == 1 && (HSV % 16) == 0 &&
+                         (uint64_t)HSV * KV_pad * nev2 * sizeof(ggml_fp16_t) <= ctx->device->properties.limits.maxStorageBufferRange;
++    // lab: the same for K (E029): K scratch [NH][HSK][KV_pad], the K x Q^T product then loads ColumnMajor tiles.
++    static const bool lab_fa_kt = getenv("GGML_VK_LAB_FA_KT") != nullptr;
++    const bool use_kt = !use_ktile && lab_fa_kt && use_dequant_kv && kv_f16_strided && tuning_params.path == FA_COOPMAT1 && aligned &&
++                        !tuning_params.shmem_staging && !use_sparse && nek3 == 1 && (HSK % 16) == 0 &&
++                        (uint64_t)HSK * KV_pad * nek2 * sizeof(ggml_fp16_t) <= ctx->device->properties.limits.maxStorageBufferRange;
++    if (use_kt) {
++        k_stride = KV_pad;
++        nbk2_eff = (uint32_t)((uint64_t)HSK * KV_pad * sizeof(ggml_fp16_t));
++        nbk3_eff = (uint32_t)((uint64_t)HSK * KV_pad * nek2 * sizeof(ggml_fp16_t));
++    }
+     if (use_vt) {
+         v_stride = KV_pad;
+         nbv2_eff = (uint32_t)((uint64_t)HSV * KV_pad * sizeof(ggml_fp16_t));
+@@ -8273,6 +8290,11 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
+     if (use_vt) {
+         fa_pipeline_state.flags |= 64;   // V_TRANSPOSED
+     }
++    if (use_kt) {
++        fa_pipeline_state.flags |= 128;  // K_TRANSPOSED
++    }
++    if (use_ktile) { fa_pipeline_state.flags |= 256; }   // K_TILED
++    if (use_vtile) { fa_pipeline_state.flags |= 512; }   // V_TILED
+ 
+     vk_pipeline pipeline = nullptr;
+ 
+@@ -8419,7 +8441,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
+ 
+     if (use_dequant_kv) {
+         const uint64_t fp = sizeof(ggml_fp16_t);
+-        const uint64_t k_f16_sz = (uint64_t)ggml_nelements(k) * fp;
++        const uint64_t k_f16_sz = use_kt ? (uint64_t)HSK * KV_pad * nek2 * fp : (uint64_t)ggml_nelements(k) * fp;
+         const uint64_t v_f16_sz = use_vt ? (uint64_t)HSV * KV_pad * nev2 * fp : (uint64_t)ggml_nelements(v) * fp;
+         if (ctx->prealloc_size_x < k_f16_sz + v_f16_sz) {
+             ctx->prealloc_size_x = k_f16_sz + v_f16_sz;
+@@ -8455,15 +8477,32 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
+                 if (ne > 512)    { return { 512, CEIL_DIV(ne, 512), 1 }; }
+                 return { ne, 1, 1 };
+             };
+-            ggml_vk_dispatch_pipeline(ctx, subctx, cp_k, { k_buf, k_dst },
+-                make_pc((uint32_t)HSK, (uint32_t)nek2, (uint32_t)KV, k_nel), cpy_elems(k_nel));
++            auto pc_k = make_pc((uint32_t)HSK, (uint32_t)nek2, (uint32_t)KV, k_nel);
++            if (use_kt) {
++                pc_k.nb10 = KV_pad; pc_k.nb11 = (uint32_t)HSK * KV_pad; pc_k.nb12 = 1; pc_k.nb13 = (uint32_t)HSK * KV_pad * (uint32_t)nek2;
++                init_pushconst_fastdiv(pc_k);
++            }
++            auto tile_pc = [](uint32_t hs, uint32_t kv, const ggml_tensor * t, uint32_t nel, uint32_t colmajor = 0) {
++                return std::array<uint32_t, 8>{ hs, kv, (uint32_t)(t->nb[1] / sizeof(ggml_fp16_t)), (uint32_t)(t->nb[2] / sizeof(ggml_fp16_t)), nel, colmajor, 0, 0 };
++            };
++            auto tile_elems = [](uint32_t ne) -> std::array<uint32_t, 3> { return { std::min<uint32_t>(ne, 8388608u), CEIL_DIV(ne, 8388608u), 1 }; };
++            if (use_ktile || use_vtile) { ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_lab_fa_kvpack, (use_ktile ? 1 : 0) + (use_vtile ? 1 : 0)); }
++            if (use_ktile) {
++                ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_lab_fa_kvpack, { k_buf, k_dst }, tile_pc((uint32_t)HSK, (uint32_t)KV, k, k_nel), tile_elems(k_nel));
++            } else {
++                ggml_vk_dispatch_pipeline(ctx, subctx, cp_k, { k_buf, k_dst }, pc_k, cpy_elems(k_nel));
++            }
+             auto pc_v = make_pc((uint32_t)HSV, (uint32_t)nev2, (uint32_t)KV, v_nel);
+             if (use_vt) {
+                 // write [NH][HSV][KV_pad]: hd strides by KV_pad, head by HSV*KV_pad, kv by 1
+                 pc_v.nb10 = KV_pad; pc_v.nb11 = (uint32_t)HSV * KV_pad; pc_v.nb12 = 1; pc_v.nb13 = (uint32_t)HSV * KV_pad * (uint32_t)nev2;
+                 init_pushconst_fastdiv(pc_v);
+             }
+-            ggml_vk_dispatch_pipeline(ctx, subctx, cp_v, { v_buf, v_dst }, pc_v, cpy_elems(v_nel));
++            if (use_vtile) {
++                ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_lab_fa_kvpack, { v_buf, v_dst }, tile_pc((uint32_t)HSV, (uint32_t)KV, v, v_nel, 1), tile_elems(v_nel));
++            } else {
++                ggml_vk_dispatch_pipeline(ctx, subctx, cp_v, { v_buf, v_dst }, pc_v, cpy_elems(v_nel));
++            }
+         } else {
+             vk_pipeline tr_k = ctx->device->pipeline_dequant_transpose[k->type];
+             vk_pipeline tr_v = ctx->device->pipeline_dequant_transpose[v->type];
+@@ -8705,6 +8744,21 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const
+         if (!ggml_vk_concat_supported(src0, src1, dst)) {
+             return nullptr;
+         }
++        // lab E040 (ported from the strix-llama fork, concat_transpose.comp): the delta-net conv-state path feeds a
++        // ggml_transpose() straight into a dim-0 concat, so the generic kernel reads src1 with a stride of
++        // conv_channels * 4 bytes - a multiple of 4096 B, i.e. ONE memory channel (lab book 3.1). Measured on
++        // Qwen3.6-35B: 30 x 16.8 ms = 505 ms of a 1779 ms prompt batch, against 30 ms on the fork. GGML_VK_LAB_CONCAT_T=1.
++        {
++            static const bool lab_concat_t = getenv("GGML_VK_LAB_CONCAT_T") != nullptr;
++            const size_t ts = ggml_type_size(src0->type);
++            if (lab_concat_t && !ggml_is_quantized(src0->type) && ggml_vk_concat_unit_size(src0->type) == 4 &&
++                ggml_get_op_params_i32(dst, 0) == 0 &&
++                src0->ne[2] == 1 && src0->ne[3] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
++                src0->nb[0] == ts && dst->nb[0] == ts && src1->nb[0] > src1->nb[1] &&
++                src0->ne[1] == src1->ne[1] && dst->ne[1] == src1->ne[1]) {
++                return ctx->device->pipeline_concat_transpose_i32;
++            }
++        }
+         switch (ggml_vk_concat_unit_size(src0->type)) {
+         case 1:
+             return ctx->device->pipeline_concat_i8;
+@@ -9630,6 +9684,11 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
+     case GGML_OP_GLU:
+     case GGML_OP_CONV_2D_DW:
+         {
++            // lab E040: the tiled concat kernel is dispatched per 32x32 tile, not per element
++            if (op == GGML_OP_CONCAT && pipeline == ctx->device->pipeline_concat_transpose_i32) {
++                elements = { (uint32_t)src1->ne[1], (uint32_t)src1->ne[0], 1 };
++                break;
++            }
+             uint32_t ne = ggml_nelements(dst);
+             if (op == GGML_OP_CPY && ggml_is_quantized(src0->type) && ggml_is_quantized(dst->type)) {
+                 // Convert from number of logical elements to 2- or 4-byte units.
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/concat_transpose.comp b/ggml/src/ggml-vulkan/vulkan-shaders/concat_transpose.comp
+new file mode 100644
+index 000000000..653aeaa01
+--- /dev/null
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/concat_transpose.comp
+@@ -0,0 +1,43 @@
++#version 450
++
++#include "types.glsl"
++#include "generic_binary_head.glsl"
++
++layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
++
++// dim-0 concat whose src1 is transposed. The generic kernel reads src1 with the transposed
++// stride, so neighbouring lanes touch different cache lines. Stage a 32x32 tile in shared
++// memory instead, which keeps both the load and the store coalesced. 33 columns pads away
++// the shared-memory bank conflicts.
++shared A_TYPE tmp[32][33];
++
++void main() {
++    const uint tx = gl_LocalInvocationID.x;
++    const uint ty = gl_LocalInvocationID.y;
++
++    const uint row = gl_WorkGroupID.x * 32 + tx;
++
++    // src0 is already contiguous, copy it straight through.
++    if (gl_WorkGroupID.y == 0 && row < p.ne01) {
++        for (uint i0 = ty; i0 < p.ne00; i0 += 8) {
++            data_d[get_doffset() + row*p.nb21 + i0*p.nb20] = D_TYPE(data_a[get_aoffset() + row*p.nb01 + i0*p.nb00]);
++        }
++    }
++
++    [[unroll]] for (uint j = 0; j < 32; j += 8) {
++        const uint c = gl_WorkGroupID.y * 32 + ty + j;
++        if (c < p.ne10 && row < p.ne11) {
++            tmp[ty + j][tx] = A_TYPE(data_b[get_boffset() + c*p.nb10 + row*p.nb11]);
++        }
++    }
++
++    barrier();
++
++    const uint col = gl_WorkGroupID.y * 32 + tx;
++    [[unroll]] for (uint j = 0; j < 32; j += 8) {
++        const uint r = gl_WorkGroupID.x * 32 + ty + j;
++        if (col < p.ne10 && r < p.ne11) {
++            data_d[get_doffset() + r*p.nb21 + (p.ne00 + col)*p.nb20] = D_TYPE(tmp[tx][ty + j]);
++        }
++    }
++}
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_base.glsl b/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_base.glsl
+index 9e50c0d51..2e56bc0a1 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_base.glsl
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_base.glsl
+@@ -26,6 +26,9 @@ const bool LOGIT_SOFTCAP   = (Flags & 4) != 0;
+ const bool OLD_AMD_WINDOWS = (Flags & 8) != 0;
+ // Sparse: gather binding-7 indices instead of scanning [0,KV); p.split_kv = n_kv_max.
+ const bool USE_SPARSE      = (Flags & 16) != 0;
++const bool K_TILED          = (Flags & 256) != 0; // lab: K scratch per head is [kv/16][hsk/16][16 x 16], every tile contiguous
++const bool V_TILED          = (Flags & 512) != 0; // lab: the same for V
++const bool K_TRANSPOSED     = (Flags & 128) != 0; // lab: K scratch is [HSK][KV_pad] per head, k_stride = KV_pad
+ const bool V_TRANSPOSED     = (Flags & 64) != 0;  // lab: V scratch is [HSV][KV_pad] per head, v_stride = KV_pad
+ const bool SPLIT_MAJOR     = (Flags & 32) != 0;  // lab H12: work-group x = chunk * Tr + row (chunk-major) instead of row * k_num + chunk
+ 
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_cm1.comp b/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_cm1.comp
+index 813038757..eabd18d92 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_cm1.comp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_cm1.comp
+@@ -311,8 +311,18 @@ void main() {
+                 uint coord = (gl_SubgroupID * MatBc) * kvsh_stride;
+                 coopMatLoad(KMat, kvsh, coord, kvsh_stride, gl_CooperativeMatrixLayoutRowMajor);
+             } else {
+-                const uint coord = k_offset / 4 + (j * Bc + gl_SubgroupID * MatBc) * k_stride / 4 + d * 16 / 4;
+-                coopMatLoad(KMat, data_kv4, coord, k_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
++                if (K_TILED) {
++                    // tile (kv tile, dim tile) is one contiguous run of 256 values (64 vec4), rows = kv, cols = dims
++                    const uint coord = k_offset / 4 + (((j * Bc + gl_SubgroupID * MatBc) / 16) * (HSK / 16) + d) * 64;
++                    coopMatLoad(KMat, data_kv4, coord, 4, gl_CooperativeMatrixLayoutRowMajor);
++                } else if (K_TRANSPOSED) {
++                    // element (kv, dim) of this head lives at dim * k_stride + kv: a ColumnMajor tile, contiguous per lane
++                    const uint coord = k_offset / 4 + (d * 16) * (k_stride / 4) + (j * Bc + gl_SubgroupID * MatBc) / 4;
++                    coopMatLoad(KMat, data_kv4, coord, k_stride / 4, gl_CooperativeMatrixLayoutColumnMajor);
++                } else {
++                    const uint coord = k_offset / 4 + (j * Bc + gl_SubgroupID * MatBc) * k_stride / 4 + d * 16 / 4;
++                    coopMatLoad(KMat, data_kv4, coord, k_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
++                }
+             }
+             } else {
+                 uint coord = (gl_SubgroupID * MatBc) * kvsh_stride + d * 16 / 4;
+@@ -498,7 +508,10 @@ void main() {
+                     if (!USE_DECODE_V && !KV_bounds_check && !USE_SPARSE) {
+                         // F16/BF16 values can be loaded directly from global memory
+                         const uint v_tile_row = j * Bc + bc_chunk * MatBc;
+-                        if (V_TRANSPOSED) {
++                        if (V_TILED) {
++                            const uint vt_tile_offset = v_offset / 4 + ((v_tile_row / 16) * (HSV / 16) + hsv_offset / 16) * 64;
++                            coopMatLoad(QMat, data_vv4, vt_tile_offset, 4, gl_CooperativeMatrixLayoutColumnMajor);   // tile stored hd-major
++                        } else if (V_TRANSPOSED) {
+                             // element (kv, hd) of this head lives at hd * v_stride + kv: a ColumnMajor tile
+                             const uint vt_tile_offset = v_offset / 4 + hsv_offset * (v_stride / 4) + v_tile_row / 4;
+                             coopMatLoad(QMat, data_vv4, vt_tile_offset, v_stride / 4, gl_CooperativeMatrixLayoutColumnMajor);
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/lab_fa_kvpack.comp b/ggml/src/ggml-vulkan/vulkan-shaders/lab_fa_kvpack.comp
+new file mode 100644
+index 000000000..1e54444ca
+--- /dev/null
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/lab_fa_kvpack.comp
+@@ -0,0 +1,30 @@
++#version 450
++
++// lab (strix-halo-kernel-lab E030): packs f16 K or V from the KV-cache layout into per-head 16x16 tiles, each tile one
++// contiguous run: [head][kv/16][hs/16][kv%16][hs%16]. Same size as the plain per-head contiguous scratch.
++#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
++
++layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
++layout(binding = 0, std430) readonly buffer S { float16_t data_s[]; };
++layout(binding = 1, std430) writeonly buffer D { float16_t data_d[]; };
++layout(push_constant) uniform parameter {
++    uint hs;       // head size
++    uint kv;       // cached tokens (multiple of 16)
++    uint nb1;      // source stride between tokens, in elements
++    uint nb2;      // source stride between heads, in elements
++    uint count;    // hs * kv * heads
++    uint colmajor; // 1: inside a tile the hs index is the slow one (for ColumnMajor loads of B-use matrices)
++    uint pad1, pad2;
++} p;
++
++void main() {
++    const uint e = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * 8388608u;
++    if (e >= p.count) {
++        return;
++    }
++    const uint hst = p.hs / 16u, kvt = p.kv / 16u;
++    const uint tile = e / 256u, r = (e % 256u) / 16u, c = e % 16u;
++    const uint ht = tile % hst, kt = (tile / hst) % kvt, head = tile / (hst * kvt);
++    const uint ih = p.colmajor != 0u ? r : c, ik = p.colmajor != 0u ? c : r;
++    data_d[e] = data_s[(ht * 16u + ih) + (kt * 16u + ik) * p.nb1 + head * p.nb2];
++}
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+index 3f3419eb5..41fb85b1d 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+@@ -955,6 +955,7 @@ void process_shaders() {
+     string_to_spv("concat_i8", "concat.comp", {{"A_TYPE", "uint8_t"}, {"B_TYPE", "uint8_t"}, {"D_TYPE", "uint8_t"}});
+     string_to_spv("concat_i16", "concat.comp", {{"A_TYPE", "uint16_t"}, {"B_TYPE", "uint16_t"}, {"D_TYPE", "uint16_t"}});
+     string_to_spv("concat_i32", "concat.comp", {{"A_TYPE", "uint"}, {"B_TYPE", "uint"}, {"D_TYPE", "uint"}});
++    string_to_spv("concat_transpose_i32", "concat_transpose.comp", {{"A_TYPE", "uint"}, {"B_TYPE", "uint"}, {"D_TYPE", "uint"}});
+     string_to_spv("concat_i64", "concat.comp", {{"A_TYPE", "uvec2"}, {"B_TYPE", "uvec2"}, {"D_TYPE", "uvec2"}});
+ 
+     string_to_spv("upscale_f32", "upscale.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}});
+@@ -1220,6 +1221,7 @@ void process_shaders() {
+     // lab: packed dense matmul (strix-halo-kernel-lab E020)
+     string_to_spv("lab_mm_pack_f16", "lab_mm_pack.comp", {{"SRC_TYPE", "float16_t"}, {"DST_TYPE", "float16_t"}});
+     string_to_spv("lab_mm_pack_f32", "lab_mm_pack.comp", {{"SRC_TYPE", "float"}, {"DST_TYPE", "float16_t"}});
++    string_to_spv("lab_fa_kvpack", "lab_fa_kvpack.comp", {});
+     string_to_spv("lab_mm_unpad_f32", "lab_mm_pack.comp", {{"SRC_TYPE", "float"}, {"DST_TYPE", "float"}});
+ #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+     string_to_spv("lab_mm_gemm", "lab_mm_gemm.comp", {}, true, true);
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 30792e409..ee9e99424 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -11457,6 +11457,58 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+     }
+ 
+ 
++
++    // ---- strix-halo-kernel-lab: exact shapes of gpt-oss-120b + ceiling sweeps. GGML_LAB_ONLY=1 runs only these.
++    if (getenv("GGML_LAB_ONLY")) {
++        test_cases.clear();
++    }
++    // (a) compute ceiling: square-ish dense matmul per weight format, prompt-sized batch
++    for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, GGML_TYPE_MXFP4}) {
++        for (int mk : {1024, 2880, 4096, 8192}) {
++            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, mk, 2048, mk, {1, 1}, {1, 1}));
++        }
++    }
++    // (b) expert matmul of gpt-oss-120b: 128 experts, 4 used, 2880 x 2880, MXFP4; batch from 1 token to a full micro-batch
++    for (int bs : {1, 4, 8, 64, 512, 2048, 4096}) {
++        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 128, 4, false, 2880, bs, 2880));
++    }
++    //     the same arithmetic as ONE dense matrix (bs*4 rows): what the expert kernel could reach without routing
++    for (int bs : {512, 2048}) {
++        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 2880, bs * 4, 2880, {1, 1}, {1, 1}));
++    }
++    // (b2) fine batch sweep for the cost model of the expert matmul: t = experts_touched * c_expert + rows * c_row
++    for (int bs : {16, 32, 128, 256, 1024}) {
++        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 128, 4, false, 2880, bs, 2880));
++    }
++    //      same number of experts USED as exist (4 of 4): every expert is dense-like, no unused weights
++    for (int bs : {64, 512, 2048}) {
++        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 4, 4, false, 2880, bs, 2880));
++    }
++    //      discriminator: same sweep with weights of twice the size (q8_0) and of four times the size (f16)
++    for (ggml_type ty : {GGML_TYPE_Q8_0, GGML_TYPE_F16}) {
++        for (int bs : {16, 128, 512, 2048}) {
++            test_cases.emplace_back(new test_mul_mat_id(ty, GGML_TYPE_F32, 128, 4, false, 2880, bs, 2880));
++        }
++        test_cases.emplace_back(new test_mul_mat_id(ty, GGML_TYPE_F32, 4, 4, false, 2880, 512, 2880));
++    }
++    //      dense reference with the same number of rows
++    for (int rows : {64, 256, 1024, 4096, 16384}) {
++        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 2880, rows, 2880, {1, 1}, {1, 1}));
++    }
++    // (c) dense projections of gpt-oss-120b (q8_0 in our file)
++    for (int bs : {1, 2048}) {
++        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 4096,   bs, 2880, {1, 1}, {1, 1})); // Wq
++        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 512,    bs, 2880, {1, 1}, {1, 1})); // Wk, Wv
++        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2880,   bs, 4096, {1, 1}, {1, 1})); // Wo
++    }
++    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 201088, 1, 2880, {1, 1}, {1, 1}));     // output head, generation
++    // (d) attention of gpt-oss-120b: 64 query heads, 8 KV heads, head 64, sinks, f16 KV; context 2k .. 65k
++    for (int64_t kv : {2048, 16384, 32768, 65536}) {
++        for (int64_t nb : {1, 512, 2048}) {
++            test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, kv, nb, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
++        }
++    }
++
+     return test_cases;
+ }
+ 
+-- 
+2.55.0
+

@@ -1,0 +1,25 @@
+Final estimate: PPL = 5.3401 +/- 0.14300
+== new build, BCOL on vs off
+   chunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p
+   Mean PPL(Q)                   :   5.340064 ±   0.143003
+   Mean    KLD:  -0.000000 ±   0.000000
+   Maximum KLD:   0.000057
+   Same top p: 100.000 ± 0.000 %
+##### server old
+  answer chars: 265 | generation 36.3 tok/s, draft accepted 83 of 88
+ok 48
+  GTT with model loaded: 76 GiB
+##### server new
+  answer chars: 265 | generation 36.3 tok/s, draft accepted 83 of 88
+ok 48
+  GTT with model loaded: 76 GiB
+code answers identical
+##### probes: new NaN 0/48 · same top token 48/48 · mean KLD 0.000000 · max 0.00000
+== llama-bench OLD, -ub 512
+             pp512 |        460.58 ± 1.89  tok/s
+            pp2048 |        448.90 ± 0.23  tok/s
+== llama-bench NEW, -ub 512
+             pp512 |        478.92 ± 2.09  tok/s
+            pp2048 |        465.61 ± 0.22  tok/s
+BO_VA lines: 0
+done

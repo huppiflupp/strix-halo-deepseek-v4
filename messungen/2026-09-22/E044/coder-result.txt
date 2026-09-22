@@ -1,0 +1,13 @@
+##### old
+  answer: ```python ⏎ def fibonacci(n: int) -> int: ⏎     if n < 0: ⏎         raise ValueError("n must be a non-negative integer") ⏎     if n == 0: ⏎         return 0 ⏎     if n == 1: ⏎         return 1 ⏎     a, b = 0, 1 ⏎     for _ in range(2, n + 1
+  generation 36.2 tok/s, draft accepted 83 of 88
+ok 48
+  GTT with model loaded: 76 GiB
+##### new
+  answer: ```python ⏎ def fibonacci(n: int) -> int: ⏎     if n < 0: ⏎         raise ValueError("n must be a non-negative integer") ⏎     if n == 0: ⏎         return 0 ⏎     if n == 1: ⏎         return 1 ⏎     a, b = 0, 1 ⏎     for _ in range(2, n + 1
+  generation 36.3 tok/s, draft accepted 83 of 88
+ok 48
+  GTT with model loaded: 76 GiB
+##### probes: new build NaN 0/48 · same top token as today's coder build 48/48 · mean KLD over shared top-20 0.000000 · max 0.00000
+BO_VA lines: 0
+done

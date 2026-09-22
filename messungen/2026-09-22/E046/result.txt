@@ -1,0 +1,21 @@
+Final estimate: PPL = 611.2166 +/- 12.39061
+== FLOOR: f16 KV, only the summation order differs (wave32 off)
+   chunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p
+   Mean PPL(Q)                   : 614.241299 ±  12.476260
+   Mean    KLD:   0.054043 ±   0.001526
+   99.9%   KLD:   3.322141
+   Same top p: 84.619 ± 0.230 %
+== K=q8_0 V=q8_0
+   chunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p
+   Mean PPL(Q)                   : 612.437068 ±  12.453237
+   Mean    KLD:   0.067287 ±   0.001757
+   99.9%   KLD:   3.628149
+   Same top p: 82.479 ± 0.243 %
+== K=f16  V=q8_0
+   chunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p
+   Mean PPL(Q)                   : 617.380038 ±  12.528571
+   Mean    KLD:   0.059025 ±   0.001569
+   99.9%   KLD:   3.620587
+   Same top p: 83.663 ± 0.236 %
+BO_VA lines: 0
+done

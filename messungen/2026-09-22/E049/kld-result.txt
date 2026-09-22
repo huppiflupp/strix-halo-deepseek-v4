@@ -1,0 +1,16 @@
+== ROCm reference
+Final estimate: PPL = 6.1295 +/- 0.09853
+== Vulkan base vs ROCm
+   chunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p
+   Mean PPL(Q)                   :   6.126472 ±   0.098620
+   Mean    KLD:   0.005072 ±   0.000352
+   99.9%   KLD:   0.126235
+   Same top p: 96.418 ± 0.119 %
+== Vulkan both vs ROCm
+   chunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p
+   Mean PPL(Q)                   :   6.129172 ±   0.098658
+   Mean    KLD:   0.005332 ±   0.000571
+   99.9%   KLD:   0.158567
+   Same top p: 96.439 ± 0.118 %
+BO_VA lines: 0
+done

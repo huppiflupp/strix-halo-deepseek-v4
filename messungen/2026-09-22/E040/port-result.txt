@@ -1,0 +1,33 @@
+== op tests CONCAT with the switch
+  Skipping
+2/2 backends passed
+[1;32mOK[0m
+== Qwen3.6 KLD: switch on vs. switch off (same build)
+Final estimate: PPL = 5.1798 +/- 0.13724
+   chunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p
+   Mean PPL(Q)                   :   5.179843 ±   0.137235
+   Mean    KLD:  -0.000000 ±   0.000000
+   Maximum KLD:   0.000059
+   Same top p: 100.000 ± 0.000 %
+== Qwen3.6 speed, X=1
+             pp512 |       1405.21 ± 0.77  tok/s
+            pp2048 |       1119.79 ± 7.35  tok/s
+              tg32 |         62.78 ± 0.21  tok/s
+    pp512 @ d16384 |        998.73 ± 8.52  tok/s
+   pp2048 @ d16384 |        994.17 ± 1.93  tok/s
+     tg32 @ d16384 |         55.96 ± 0.18  tok/s
+== Qwen3.6 speed, GGML_VK_LAB_CONCAT_T=1
+             pp512 |       1464.43 ± 4.95  tok/s
+            pp2048 |       1839.06 ± 1.66  tok/s
+              tg32 |         62.68 ± 0.19  tok/s
+    pp512 @ d16384 |      1023.71 ± 11.88  tok/s
+   pp2048 @ d16384 |       1291.07 ± 5.23  tok/s
+     tg32 @ d16384 |         55.84 ± 0.12  tok/s
+== Qwen3.8-27B (coder model, packed matmul, -ub 512), X=1
+             pp512 |        454.71 ± 1.63  tok/s
+            pp2048 |        438.62 ± 0.10  tok/s
+== Qwen3.8-27B (coder model, packed matmul, -ub 512), GGML_VK_LAB_CONCAT_T=1
+             pp512 |        467.73 ± 2.09  tok/s
+            pp2048 |        448.05 ± 0.46  tok/s
+BO_VA lines: 0
+done

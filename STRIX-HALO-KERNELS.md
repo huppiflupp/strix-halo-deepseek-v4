@@ -84,6 +84,17 @@ transposed shape.
 | + V scratch stored transposed, loaded column-major | 1459 | 704 |
 | + both | 1459 | **829** |
 
+**Second model and more depths** (same build, 3 repetitions, 2048-token prompt, tok/s, none / transposed V / 32-wide / both):
+
+| Model (head size) | depth 0 | 8 k | 16 k | 32 k |
+|---|---|---|---|---|
+| gpt-oss-120b (64) | 1476 / 1468 / 1470 / 1461 | 1102 / 1141 / 1145 / **1217** | 888 / 935 / 936 / **1040** | 636 / 675 / 679 / **796** (+25 %) |
+| Qwen3-30B-A3B IQ4_XS (128) | 2035 / 2082 / 2094 / 2144 | 970 / 1052 / 1078 / **1272** | 636 / 704 / 723 / **892** | 375 / 412 / 426 / **558** (+49 %) |
+
+Generation unchanged in all variants (< 0.6 %). Together the two changes give more than the sum of each alone. KLD against the
+ROCm backend, Qwen3-30B-A3B, 8192-token windows: without 0.00507 +/- 0.00035 (96.42 % same top token), with both 0.00533 +/- 0.00057
+(96.44 %) — equal within the error.
+
 Both attention changes build on the contiguous KV copy of #27703; the transposed-V one is bit-identical. For the 32-wide
 subgroups the KL divergence against the ROCm backend is the same as for the 64-wide path (0.0512 vs 0.0520). Without
 #27703, #27952 alone hit a GPU job timeout at 32 k depth on this machine. A larger micro-batch (`-ub 4096 / 8192`) gives at
@@ -124,3 +135,18 @@ KV chunking for the GPU cache: +43 % on master, nothing on top of #27703.
   1000 MHz = 8000. Please report it.
 * **Checking a build without a perplexity tool:** ask `llama-server` `/completion` for `n_predict: 1, n_probs: 20` on a few
   dozen text excerpts; `null` log-probabilities mean NaN logits. Two minutes per server.
+
+## 8. Code, raw data, and what has not been submitted anywhere
+
+* **Patches:** [patches/2026-09-22/](patches/2026-09-22/) — five `git am` patches on llama.cpp master `ec9281505` + PR #27952,
+  every change behind an off-by-default switch, with a table of what each does. Raw results and the measuring scripts:
+  [messungen/2026-09-22/](messungen/2026-09-22/) (per experiment; `probe.py` / `compare.py` are the first-token probe).
+* **Not submitted upstream.** llama.cpp and Mesa do not accept AI-written issues, comments or PR descriptions, and this work was
+  done with an AI coding assistant throughout. The data is here for anyone who looks for it; whoever wants to carry a piece of it
+  upstream is welcome to — credit for the concat kernel belongs to Nathanw1014.
+* **A trap in the strix-halo-llamacpp bundle (build 10565):** the documented opt-out `GGML_VK_MMID_WAVE32=0` makes Qwen3.6-35B-A3B
+  return NaN logits for every prompt (48 of 48 first-token probes, independent of the other `GGML_VK_MMID_*` flags) while
+  `llama-bench` shows it 9–28 % *faster*. The default setting is fine; do not set this flag to 0.
+* **Checklist that a llama.cpp PR would still need** for the pieces above: the full local CI (`ci/run.sh`, not run), a
+  `test-backend-ops` case with a transposed CONCAT source (the existing cases do not exercise the concat kernel), and a human
+  author who can defend every line.
