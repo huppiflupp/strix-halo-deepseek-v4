@@ -32,6 +32,10 @@ unten sind damit ueberholt)
 * **V4-Flash ist nicht bandbreitenlimitiert:** ein 27-B-Dense-Modell decodiert gleich schnell,
   obwohl es pro Token 3x mehr Bytes liest. Der MoE-Overhead frisst den theoretischen Vorteil.
 
+* **Kernel-Analyse Strix Halo** (21./22.09.2026, auf Englisch): Speicherkanal-Regel, 32-MB-Cache, 50 TFLOPS Matrix-Instruktion,
+  warum ein einzelnes `CONCAT` 28 % eines Qwen3.6-Prompts kostet, was sich bei gpt-oss-120b stapelt, q8_0-KV gegen den Rauschboden —
+  siehe [STRIX-HALO-KERNELS.md](STRIX-HALO-KERNELS.md).
+
 * **Nebenmessung gpt-oss-120b** auf derselben Maschine (20.09.2026): `-ub 2048` bringt +33,5 %
   Prompt-Verarbeitung, die Textausgabe liegt bei 85 % der Speicherbandbreite, EAGLE3 kostet
   15 bis 46 % — siehe [GPT-OSS-120B.md](GPT-OSS-120B.md) (auf Englisch).
