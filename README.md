@@ -39,6 +39,8 @@ unten sind damit ueberholt)
 * **Nebenmessung gpt-oss-120b** auf derselben Maschine (20.09.2026): `-ub 2048` bringt +33,5 %
   Prompt-Verarbeitung, die Textausgabe liegt bei 85 % der Speicherbandbreite, EAGLE3 kostet
   15 bis 46 % — siehe [GPT-OSS-120B.md](GPT-OSS-120B.md) (auf Englisch).
+  Nachtrag 25.09.: der Lesezugriff über das Matrixende im int8-coopmat-Kern (llama.cpp #29342) ist bei
+  gpt-oss-120b (K = 2880) echt, aber harmlos; die Ein-Zeilen-Korrektur ändert die Logits nicht und kostet höchstens ~1 %.
 
 ## Hardware / Software
 

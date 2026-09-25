@@ -237,6 +237,61 @@ quality cost. The fastest combination overall (PR #27952 + KV q8_0) would add +6
 and +25 % on short prompts, at roughly 9 % higher perplexity and on an unmerged PR — not
 taken for a service where correct beats fast.
 
+## Follow-up, 2026-09-25: the out-of-bounds A load in the int8 coopmat kernel
+
+PR #27952 was merged on 2026-09-24. In
+[ggml-org/llama.cpp#29342](https://github.com/ggml-org/llama.cpp/issues/29342), a user with an RX 7900 XTX
+reported that its A-operand prefetch in `mul_mmq_cm1_funcs.glsl` reads past `end_k` whenever K is
+not a multiple of 128 (`BK * BK_STEP`). That read lands on the next row or, for the last row of a
+tensor, on bytes behind it, which could hold a NaN scale. A one-line clamp was proposed. A second
+user showed on the same card that RADV returns 0 for the out-of-range load, so nothing breaks there
+today. Both tests used synthetic shapes. Nobody asked for a gfx1151 run; this is here because
+gpt-oss-120b is a real model that hits the case, and because our own serving builds carry the
+kernel too.
+
+**Why gpt-oss-120b qualifies:** hidden size 2880, and 2880 % 128 = 64. The Q8_0 matrices `attn_q`
+(m = 4096), `attn_k`/`attn_v` (m = 512) and `output.weight` (m = 201088, so the last row reads past
+the tensor end) all have K = 2880. The Vulkan perf logger shows them in prompt processing:
+`MUL_MAT q8_0 m=4096 n=512 k=2880` ×36 and `m=512 n=512 k=2880` ×72 per pp512. The MXFP4 experts
+(`MUL_MAT_ID`, K = 2880) are not affected, because that path aligns to 64.
+
+**Setup:** master `e9f824d8c` (contains #27952) against the same commit plus the clamp
+([`cm1-a-guard.patch`](messungen/2026-09-25/cm1-bounds-29342/cm1-a-guard.patch)), Vulkan, RADV
+STRIX_HALO, Mesa 26.2.1, 85 W. Raw logs:
+[`messungen/2026-09-25/cm1-bounds-29342/`](messungen/2026-09-25/cm1-bounds-29342/).
+
+**Correctness.** `test-backend-ops -b Vulkan0`: MUL_MAT 1128/1128 and MUL_MAT_ID 937/937 on both
+builds. For the model, master's logits were saved (`--kl-divergence-base`, wikitext-2, 10 × 2048,
+`-fa 1`) and compared against the patched build and against a second master run as a control:
+
+| | Perplexity | max KLD | same top token |
+|---|---|---|---|
+| master | 457.2697 ± 14.50 | – | – |
+| patched vs. master | 457.2696 | 0.000050 | 100.000 % |
+| master vs. master (control) | 457.2696 | 0.000050 | 100.000 % |
+
+The per-chunk output of the two comparisons is identical line for line. The residual KLD comes from
+the compressed storage of the reference logits, not from the patch. On gfx1151, too, the
+out-of-bounds read turns out harmless in practice, and the clamp changes nothing numerically.
+
+**Speed.** `llama-bench -fa 1 -ngl 999 -r 5`, t/s. Round 1 ran master first, round 2 ran the
+patched build first:
+
+| test | master R1 | patched R1 | patched R2 | master R2 | mean Δ |
+|---|---|---|---|---|---|
+| pp512, ub 512 | 1157.6 ± 6.3 | 1141.4 ± 7.4 | 1142.8 ± 5.8 | 1145.5 ± 5.5 | −0.8 % |
+| pp2048, ub 512 | 1113.6 ± 18.0 | 1101.9 ± 18.1 | 1101.9 ± 17.7 | 1103.8 ± 17.0 | −0.6 % |
+| pp512, ub 2048 | 1133.2 ± 10.3 | 1126.4 ± 8.6 | 1092.2 ± 7.5 | 1095.1 ± 7.0 | −0.4 % |
+| pp2048, ub 2048 | 1430.7 ± 5.6 | 1421.2 ± 1.7 | 1419.8 ± 2.1 | 1425.5 ± 2.8 | −0.5 % |
+| tg128 | 53.71 ± 0.01 | 53.76 ± 0.02 | – | – | ±0 |
+
+Round 1 shows −0.6 to −1.4 %, round 2 only −0.2 to −0.4 %, so part of the gap is run order and
+temperature. Only two rounds: read this as "at most about 1 %", not as a measured cost.
+
+**Conclusion:** on gfx1151 the clamp is free of numerical effect on a model that really triggers the
+condition, and costs at most around 1 % of prompt speed. It removes a dependence on undefined
+behaviour (the driver's out-of-range answer) for that price.
+
 ## Not measured
 
 The 120 W power mode, `amd_iommu=off`, and n-gram speculation.
