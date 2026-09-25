@@ -1,0 +1,12 @@
+# test-backend-ops perf -o MUL_MAT -b ROCm0 --test-file width.txt (SimonTeixidor's two shapes, #28613)
+# q2_K, K=5120, ne11=8; master ec9281505 vs PR eb50b32e8 (cherry-picked), gfx1151, two runs each, us/run
+29 0 1024 8 1 1 0 2 10 5120 1024 1 1 0 0 0 0 0 5120 8 1 1 0 0 0 0 W_narrow_ne01_1024
+29 0 17408 8 1 1 0 2 10 5120 17408 1 1 0 0 0 0 0 5120 8 1 1 0 0 0 0 W_wide_ne01_17408
+master  #1  W_narrow_ne01_1024   39.93
+master  #1  W_wide_ne01_17408   562.06
+master  #2  W_narrow_ne01_1024   40.97
+master  #2  W_wide_ne01_17408   563.21
+pr28613 #1  W_narrow_ne01_1024   91.19
+pr28613 #1  W_wide_ne01_17408   563.10
+pr28613 #2  W_narrow_ne01_1024   91.26
+pr28613 #2  W_wide_ne01_17408   562.82

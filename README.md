@@ -41,6 +41,9 @@ unten sind damit ueberholt)
   15 bis 46 % — siehe [GPT-OSS-120B.md](GPT-OSS-120B.md) (auf Englisch).
   Nachtrag 25.09.: der Lesezugriff über das Matrixende im int8-coopmat-Kern (llama.cpp #29342) ist bei
   gpt-oss-120b (K = 2880) echt, aber harmlos; die Ein-Zeilen-Korrektur ändert die Logits nicht und kostet höchstens ~1 %.
+* **HIP-Schwellwerte (llama.cpp PR #28613)** auf gfx1151 (25.09.2026): ob der frühe Wechsel vom Vektor- auf den
+  Matrixkern hilft, hängt an der Matrixbreite — schmale Matrizen bis 5,7× langsamer, breite Q4_K bis 2× schneller;
+  6 Runden, Wilcoxon + Bootstrap — siehe [HIP-MMVQ-THRESHOLDS.md](HIP-MMVQ-THRESHOLDS.md) (auf Englisch).
 
 ## Hardware / Software
 
